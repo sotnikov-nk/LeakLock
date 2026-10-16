@@ -1,0 +1,87 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+# Builds run repository code (tests, build scripts), so they only get read access.
+# Write access is limited to the release job below, which runs no repository code.
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # macOS 26 SDK (Xcode 26) is required for Liquid Glass.
+    runs-on: macos-26
+    timeout-minutes: 30
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_2[6-9]*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$XCODE" ]; then sudo xcode-select -s "$XCODE"; fi
+          xcodebuild -version
+          swift --version
+
+      - name: Test
+        run: swift test
+
+      # The app compares Version.swift with the release tag to offer updates, so a tag
+      # that disagrees with it would offer the same release forever.
+      - name: Version
+        id: version
+        run: |
+          CODE=$(sed -n 's/.*current = "\(.*\)".*/\1/p' Sources/LeakLockCore/Version.swift)
+          if ! [[ "$CODE" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
+            echo "::error::Bad version in Version.swift: $CODE"; exit 1
+          fi
+          if [[ "$GITHUB_REF" == refs/tags/v* && "${GITHUB_REF_NAME#v}" != "$CODE" ]]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match Version.swift ($CODE)"; exit 1
+          fi
+          echo "value=$CODE" >> "$GITHUB_OUTPUT"
+
+      - name: Build app and DMG
+        env:
+          VERSION: ${{ steps.version.outputs.value }}
+        run: scripts/build-app.sh "$VERSION"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LeakLock-${{ steps.version.outputs.value }}
+          path: build/*.dmg
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: LeakLock-${{ needs.build.outputs.version }}
+          path: dist
+
+      # The release may already exist when it was published from the GitHub UI
+      # (that is what created the tag); then just attach the DMG to it.
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/*.dmg --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/*.dmg --title "LeakLock $GITHUB_REF_NAME" --generate-notes
+          fi

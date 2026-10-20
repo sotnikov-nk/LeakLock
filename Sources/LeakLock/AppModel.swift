@@ -14,6 +14,9 @@ final class AppModel: ObservableObject {
 
     private var timer: Timer?
     private var requestInFlight = false
+    /// Bumped on every settings change. A reply to a request sent before the latest
+    /// change carries outdated settings and is not shown.
+    private var configGeneration = 0
 
     init() {
         refresh()
@@ -25,7 +28,9 @@ final class AppModel: ObservableObject {
     // MARK: - Daemon
 
     func refresh() {
-        helperInstalled = HelperInstaller.isInstalled
+        // Assign only on change: every assignment redraws the menu bar item and menu.
+        let installed = HelperInstaller.isInstalled
+        if helperInstalled != installed { helperInstalled = installed }
         guard !requestInFlight else { return }
         send(IPCRequest(command: .status), reportErrors: false)
     }
@@ -38,23 +43,30 @@ final class AppModel: ObservableObject {
         send(IPCRequest(command: .resetLearnedRoutes))
     }
 
+    /// Shows the change at once and sends it to the daemon; quick repeated changes
+    /// (stepper clicks) build on each other instead of on the daemon's last reply.
     func updateConfig(_ change: (inout GuardConfig) -> Void) {
         guard var config = status?.config else { return }
         change(&config)
+        configGeneration += 1
+        status?.config = config
         send(IPCRequest(command: .setConfig, config: config))
+        // The daemon applies the change right after replying; pick up the new state.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { self.refresh() }
     }
 
     private func send(_ request: IPCRequest, reportErrors: Bool = true) {
         requestInFlight = true
+        let generation = configGeneration
         Task.detached(priority: .userInitiated) {
             let result = Result { try DaemonClient.send(request) }
             await MainActor.run {
                 self.requestInFlight = false
                 switch result {
                 case .success(let response):
-                    self.daemonReachable = true
-                    if let status = response.status {
-                        self.status = status
+                    if !self.daemonReachable { self.daemonReachable = true }
+                    if let status = response.status, generation == self.configGeneration {
+                        if self.status != status { self.status = status }
                         self.finishPendingUpdate()
                     }
                     if response.ok {

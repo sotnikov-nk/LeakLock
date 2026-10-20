@@ -52,9 +52,14 @@ final class Engine {
     private var mainRulesetError: String?
     private var state: GuardState = .disabled
     private var tickScheduled = false
+    /// Last status, readable without waiting for `queue`: a tick runs several pfctl
+    /// commands, and the menu should not wait for them just to show the status.
+    private let statusLock = NSLock()
+    private var publishedStatus: GuardStatus?
 
     init(config: GuardConfig) {
         self.config = config
+        publishStatus()
     }
 
     func start() {
@@ -109,6 +114,7 @@ final class Engine {
            pfError == nil, !checkInFlight, Date() >= nextCheckAt {
             startCheck(tunnel: current)
         }
+        publishStatus()
     }
 
     private func learn(_ table: ProtectedTable, tunnel: String) {
@@ -295,6 +301,11 @@ final class Engine {
     // MARK: - IPC
 
     func handle(_ request: IPCRequest, peerIsAdmin: Bool) -> IPCResponse {
+        if request.command == .status {
+            return IPCResponse(ok: true, status: currentStatus())
+        }
+        // Changes only update the engine's state here; the tick that applies them runs
+        // right after on `queue`, so the reply does not wait for pfctl.
         return queue.sync { () -> IPCResponse in
             switch request.command {
             case .status:
@@ -305,7 +316,7 @@ final class Engine {
                 if now.timeIntervalSince(lastForcedCheck) >= 3 {
                     lastForcedCheck = now
                     nextCheckAt = .distantPast
-                    tick()
+                    queue.async { self.tick() }
                 }
                 return IPCResponse(ok: true, status: makeStatus())
             case .resetLearnedRoutes:
@@ -316,8 +327,8 @@ final class Engine {
                 candidate = nil
                 LearnedRoutesStore.save(learned)
                 log("learned routes reset")
-                tick()
-                return IPCResponse(ok: true, status: makeStatus())
+                queue.async { self.tick() }
+                return IPCResponse(ok: true, status: publishStatus())
             case .setConfig:
                 guard peerIsAdmin else {
                     return IPCResponse(ok: false, error: "Менять настройки может только администратор Mac.")
@@ -337,10 +348,26 @@ final class Engine {
                 }
                 config = newConfig
                 log("config updated: enabled=\(config.enabled) servers=\(config.vpnServerIPs) lan=\(config.allowLAN) dns=\(config.allowDNS)")
-                tick()
-                return IPCResponse(ok: true, status: makeStatus())
+                queue.async { self.tick() }
+                return IPCResponse(ok: true, status: publishStatus())
             }
         }
+    }
+
+    private func currentStatus() -> GuardStatus {
+        statusLock.lock()
+        defer { statusLock.unlock() }
+        // Set in init, so never nil; makeStatus itself must only run on `queue`.
+        return publishedStatus ?? GuardStatus(state: .error, config: GuardConfig())
+    }
+
+    @discardableResult
+    private func publishStatus() -> GuardStatus {
+        let status = makeStatus()
+        statusLock.lock()
+        publishedStatus = status
+        statusLock.unlock()
+        return status
     }
 
     private func makeStatus() -> GuardStatus {

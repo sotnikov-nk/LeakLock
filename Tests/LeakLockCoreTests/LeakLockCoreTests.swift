@@ -24,6 +24,8 @@ final class ConfigTests: XCTestCase {
             .sanitized()
         XCTAssertEqual(c.vpnServerIPs, ["1.2.3.4", "2001:db8::1"])
         XCTAssertEqual(c.recheckIntervalSeconds, 15)
+        XCTAssertEqual(GuardConfig(pfCheckIntervalSeconds: 0).sanitized().pfCheckIntervalSeconds, 1)
+        XCTAssertEqual(GuardConfig(pfCheckIntervalSeconds: 60).sanitized().pfCheckIntervalSeconds, 10)
     }
 
     func testDecodesPartialJSON() throws {
@@ -31,6 +33,7 @@ final class ConfigTests: XCTestCase {
         XCTAssertTrue(c.enabled)
         XCTAssertFalse(c.allowLAN)
         XCTAssertEqual(c.recheckIntervalSeconds, 60)
+        XCTAssertEqual(c.pfCheckIntervalSeconds, 1)
     }
 
     func testStatusRoundTrip() throws {

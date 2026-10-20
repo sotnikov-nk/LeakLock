@@ -66,7 +66,7 @@ final class Engine {
         queue.async { self.tick() }
         routeWatcher.start(queue: queue) { [weak self] in self?.scheduleTick() }
         let t = DispatchSource.makeTimerSource(queue: queue)
-        // Every second: catches lost routing events and pf tampering quickly.
+        // Every second: catches lost routing events; pf health runs on its own interval.
         t.schedule(deadline: .now() + 1, repeating: 1)
         t.setEventHandler { [weak self] in self?.tick() }
         t.resume()
@@ -150,7 +150,8 @@ final class Engine {
 
     private func apply(_ mode: FilterMode?) {
         let now = Date()
-        let healthDue = now.timeIntervalSince(lastHealthCheck) >= 1
+        // A little under the interval, so timer jitter does not skip a whole second.
+        let healthDue = now.timeIntervalSince(lastHealthCheck) >= Double(config.pfCheckIntervalSeconds) - 0.1
 
         guard let mode else {
             if appliedRules != nil || !initialized {

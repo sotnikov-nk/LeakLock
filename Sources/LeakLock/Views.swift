@@ -355,6 +355,21 @@ struct SettingsView: View {
                         step: 15
                     )
                 }
+                Section {
+                    Stepper(
+                        "Проверять каждые \(config.pfCheckIntervalSeconds) с",
+                        value: Binding(
+                            get: { config.pfCheckIntervalSeconds },
+                            set: { value in model.updateConfig { $0.pfCheckIntervalSeconds = value } }
+                        ),
+                        in: 1...10
+                    )
+                } header: {
+                    Text("Проверка правил pf")
+                } footer: {
+                    Text("Как часто служба проверяет, что pf включён и правила LeakLock не изменила другая программа. Обрыв VPN блокируется мгновенно при любом значении. Больший интервал чуть экономит батарею, но вмешательство в pf будет замечено позже.")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             if let status = model.status, status.config.blockScope == .vpnRoutes {

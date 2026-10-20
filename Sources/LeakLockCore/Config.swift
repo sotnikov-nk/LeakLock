@@ -26,6 +26,10 @@ public struct GuardConfig: Codable, Equatable {
     public var allowDNS: Bool
     /// How often the external IP is re-checked while the tunnel is open, in seconds.
     public var recheckIntervalSeconds: Int
+    /// How often the daemon verifies that pf is on and its rules are intact, in
+    /// seconds. Only affects how fast tampering by other software is noticed: the
+    /// rules themselves block in the kernel the moment the VPN drops.
+    public var pfCheckIntervalSeconds: Int
 
     public init(
         enabled: Bool = false,
@@ -33,7 +37,8 @@ public struct GuardConfig: Codable, Equatable {
         vpnServerIPs: [String] = [],
         allowLAN: Bool = false,
         allowDNS: Bool = false,
-        recheckIntervalSeconds: Int = 60
+        recheckIntervalSeconds: Int = 60,
+        pfCheckIntervalSeconds: Int = 1
     ) {
         self.enabled = enabled
         self.blockScope = blockScope
@@ -41,6 +46,7 @@ public struct GuardConfig: Codable, Equatable {
         self.allowLAN = allowLAN
         self.allowDNS = allowDNS
         self.recheckIntervalSeconds = recheckIntervalSeconds
+        self.pfCheckIntervalSeconds = pfCheckIntervalSeconds
     }
 
     public init(from decoder: Decoder) throws {
@@ -54,6 +60,8 @@ public struct GuardConfig: Codable, Equatable {
         allowDNS = try c.decodeIfPresent(Bool.self, forKey: .allowDNS) ?? d.allowDNS
         recheckIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .recheckIntervalSeconds)
             ?? d.recheckIntervalSeconds
+        pfCheckIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .pfCheckIntervalSeconds)
+            ?? d.pfCheckIntervalSeconds
     }
 
     /// Server IPs that parse as IPv4/IPv6, normalized and de-duplicated.
@@ -73,6 +81,7 @@ public struct GuardConfig: Codable, Equatable {
         var copy = self
         copy.vpnServerIPs = validServerIPs.map(\.description)
         copy.recheckIntervalSeconds = min(max(recheckIntervalSeconds, 15), 3600)
+        copy.pfCheckIntervalSeconds = min(max(pfCheckIntervalSeconds, 1), 10)
         return copy
     }
 }

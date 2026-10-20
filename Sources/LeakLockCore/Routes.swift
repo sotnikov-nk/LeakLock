@@ -173,6 +173,19 @@ public struct ProtectedTable: Codable, Equatable {
 
     public var isEmpty: Bool { included.isEmpty }
 
+    /// Protection never narrows on its own: everything either table sends into the
+    /// tunnel stays included. Exemptions come from `current` only, the routes the VPN
+    /// client has right now; an old exemption that is gone just means more is blocked.
+    /// A network the VPN now sends direct is an exemption, not an entry, since pf
+    /// cannot hold both.
+    public func merged(with current: ProtectedTable) -> ProtectedTable {
+        let excluded = Set(current.excluded)
+        return ProtectedTable(
+            included: Set(included).union(current.included).subtracting(excluded).sorted(by: Routes.order),
+            excluded: excluded.sorted(by: Routes.order)
+        )
+    }
+
     /// pf table entries, negations last-match by longest prefix inside pf.
     public var pfEntries: [String] {
         included.map(\.description) + excluded.map { "!" + $0.description }

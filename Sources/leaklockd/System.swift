@@ -73,10 +73,11 @@ final class PF {
     private var token: String?
 
     /// Takes a pf reference (once) and re-enables pf if someone force-disabled it.
-    /// Returns true when pf had been disabled behind our back.
+    /// `tampered`: pf had been disabled behind our back. `enabled`: pf is on now; when
+    /// false nothing we load is enforced.
     @discardableResult
-    func ensureEnabled() -> Bool {
-        if token != nil, isEnabled() { return false }
+    func ensureEnabled() -> (tampered: Bool, enabled: Bool) {
+        if token != nil, isEnabled() { return (false, true) }
         let wasHeld = token != nil
         if wasHeld { log("pf was disabled by someone else; re-enabling") }
         let r = Shell.run(pfctl, ["-E"])
@@ -85,7 +86,7 @@ final class PF {
         } else {
             log("pfctl -E: \(r.combined.trimmingCharacters(in: .whitespacesAndNewlines))")
         }
-        return wasHeld
+        return (wasHeld, isEnabled())
     }
 
     func isEnabled() -> Bool {
@@ -108,10 +109,16 @@ final class PF {
         Shell.run(pfctl, ["-a", anchor, "-F", "rules"])
     }
 
-    /// Number of rules currently loaded in the anchor.
-    func loadedRuleCount() -> Int {
-        Shell.run(pfctl, ["-a", anchor, "-s", "rules"]).stdout
-            .split(whereSeparator: \.isNewline).filter { !$0.isEmpty }.count
+    /// What pf reports for the anchor right now: its rules and the protected table.
+    /// Compared with the snapshot taken right after loading, it catches rules being
+    /// flushed, replaced by others, or the table being emptied. nil when pfctl fails.
+    func anchorSnapshot() -> String? {
+        let rules = Shell.run(pfctl, ["-a", anchor, "-s", "rules"])
+        guard rules.ok else { return nil }
+        // Fails harmlessly when the ruleset has no table (`.everything`); the empty
+        // output is then part of the expected snapshot.
+        let table = Shell.run(pfctl, ["-a", anchor, "-t", PFRules.anchorTable, "-T", "show"])
+        return rules.stdout + "\n--- table\n" + table.stdout
     }
 
     enum MainRulesetHealth: Equatable {
@@ -149,8 +156,9 @@ final class PF {
     }
 
     /// Kills existing connections so nothing keeps using a path that is now closed.
-    func flushStates() {
-        Shell.run(pfctl, ["-F", "states"])
+    /// Returns false when pfctl failed and the old connections may still be alive.
+    func flushStates() -> Bool {
+        Shell.run(pfctl, ["-F", "states"]).ok
     }
 }
 

@@ -24,6 +24,8 @@ final class ConfigTests: XCTestCase {
             .sanitized()
         XCTAssertEqual(c.vpnServerIPs, ["1.2.3.4", "2001:db8::1"])
         XCTAssertEqual(c.recheckIntervalSeconds, 15)
+        XCTAssertEqual(GuardConfig(pfCheckIntervalSeconds: 0).sanitized().pfCheckIntervalSeconds, 1)
+        XCTAssertEqual(GuardConfig(pfCheckIntervalSeconds: 60).sanitized().pfCheckIntervalSeconds, 10)
     }
 
     func testDecodesPartialJSON() throws {
@@ -31,6 +33,7 @@ final class ConfigTests: XCTestCase {
         XCTAssertTrue(c.enabled)
         XCTAssertFalse(c.allowLAN)
         XCTAssertEqual(c.recheckIntervalSeconds, 60)
+        XCTAssertEqual(c.pfCheckIntervalSeconds, 1)
     }
 
     func testStatusRoundTrip() throws {
@@ -59,8 +62,8 @@ final class PFRulesTests: XCTestCase {
         let rules = PFRules.ruleset(mode: .locked, config: config)
         let lines = rules.split(separator: "\n").map(String.init)
         XCTAssertEqual(lines.last, "block return out quick all")
-        XCTAssertTrue(lines.contains("pass out quick inet from any to { 203.0.113.10 }"))
-        XCTAssertTrue(lines.contains("pass out quick inet6 from any to { 2001:db8::1 }"))
+        XCTAssertTrue(lines.contains("pass out quick inet from any to { 203.0.113.10 } no state"))
+        XCTAssertTrue(lines.contains("pass out quick inet6 from any to { 2001:db8::1 } no state"))
         XCTAssertFalse(rules.contains("utun"))
         XCTAssertFalse(rules.contains("port 53"))
         XCTAssertFalse(rules.contains("192.168.0.0/16"))
@@ -88,8 +91,6 @@ final class PFRulesTests: XCTestCase {
     func testOpenAllowsTunnel() {
         let rules = PFRules.ruleset(mode: .open(tunnel: "utun22"), config: config)
         XCTAssertTrue(rules.contains("pass out quick on utun22 all keep state (if-bound)"))
-        XCTAssertTrue(PFRules.ruleset(mode: .open(tunnel: "utun22"), config: config, ifBoundStates: false)
-            .contains("pass out quick on utun22 all\n"))
         XCTAssertTrue(rules.hasSuffix("block return out quick all\n"))
     }
 
@@ -134,16 +135,26 @@ final class PFRulesTests: XCTestCase {
 
     func testStateFlushPolicy() {
         let t = "utun22"
-        XCTAssertTrue(PFRules.needsStateFlush(from: nil, to: .locked, rulesChanged: true))
-        XCTAssertTrue(PFRules.needsStateFlush(from: nil, to: .open(tunnel: t), rulesChanged: true))
-        XCTAssertFalse(PFRules.needsStateFlush(from: .locked, to: .verifying(tunnel: t), rulesChanged: true))
-        XCTAssertFalse(PFRules.needsStateFlush(from: .verifying(tunnel: t), to: .open(tunnel: t), rulesChanged: true))
-        XCTAssertFalse(PFRules.needsStateFlush(from: .open(tunnel: t), to: .open(tunnel: t), rulesChanged: true))
-        XCTAssertFalse(PFRules.needsStateFlush(from: .locked, to: .locked, rulesChanged: false))
-        XCTAssertTrue(PFRules.needsStateFlush(from: .locked, to: .locked, rulesChanged: true))
-        XCTAssertTrue(PFRules.needsStateFlush(from: .verifying(tunnel: t), to: .locked, rulesChanged: true))
-        XCTAssertTrue(PFRules.needsStateFlush(from: .open(tunnel: t), to: .verifying(tunnel: t), rulesChanged: true))
-        XCTAssertTrue(PFRules.needsStateFlush(from: .open(tunnel: t), to: .open(tunnel: "utun23"), rulesChanged: true))
+        XCTAssertTrue(PFRules.needsStateFlush(from: nil, to: .locked, policyChanged: false))
+        XCTAssertTrue(PFRules.needsStateFlush(from: nil, to: .open(tunnel: t), policyChanged: false))
+        XCTAssertFalse(PFRules.needsStateFlush(from: .locked, to: .verifying(tunnel: t), policyChanged: false))
+        XCTAssertFalse(PFRules.needsStateFlush(from: .verifying(tunnel: t), to: .open(tunnel: t), policyChanged: false))
+        XCTAssertFalse(PFRules.needsStateFlush(from: .open(tunnel: t), to: .open(tunnel: t), policyChanged: false))
+        XCTAssertFalse(PFRules.needsStateFlush(from: .locked, to: .locked, policyChanged: false))
+        XCTAssertTrue(PFRules.needsStateFlush(from: .locked, to: .locked, policyChanged: true))
+        XCTAssertTrue(PFRules.needsStateFlush(from: .verifying(tunnel: t), to: .locked, policyChanged: false))
+        XCTAssertTrue(PFRules.needsStateFlush(from: .open(tunnel: t), to: .verifying(tunnel: t), policyChanged: false))
+        XCTAssertTrue(PFRules.needsStateFlush(from: .open(tunnel: t), to: .open(tunnel: "utun23"), policyChanged: false))
+        // Tightening while the tunnel stays open (e.g. "DNS без VPN" switched off) must
+        // end connections opened under the old rules.
+        XCTAssertTrue(PFRules.needsStateFlush(from: .open(tunnel: t), to: .open(tunnel: t), policyChanged: true))
+        XCTAssertTrue(PFRules.needsStateFlush(from: .locked, to: .open(tunnel: t), policyChanged: true))
+    }
+
+    func testServerRulesSurviveStateFlush() {
+        // Stateless, so the VPN client's connection is not cut by a state flush.
+        let rules = PFRules.ruleset(mode: .open(tunnel: "utun22"), config: config)
+        XCTAssertTrue(rules.contains("pass out quick inet from any to { 203.0.113.10 } no state\n"))
     }
 
     func testIPCheckEndpointsAreHostnamesOverHTTP() {
@@ -238,6 +249,11 @@ final class ParseTests: XCTestCase {
         XCTAssertFalse(Parse.pfEnabled("Status: Disabled                             Debug: Urgent\n"))
         XCTAssertTrue(Parse.mainRulesetHasAppleAnchor("scrub-anchor \"com.apple/*\" all fragment reassemble\nanchor \"com.apple/*\" all\n"))
         XCTAssertFalse(Parse.mainRulesetHasAppleAnchor("scrub-anchor \"com.apple/*\" all\npass all\n"))
+        // Inbound-only hook, or an outbound quick pass ahead of the hook: our rules
+        // would never see outgoing packets.
+        XCTAssertFalse(Parse.mainRulesetHasAppleAnchor("anchor \"com.apple/*\" in all\n"))
+        XCTAssertFalse(Parse.mainRulesetHasAppleAnchor("pass out quick all flags S/SA keep state\nanchor \"com.apple/*\" all\n"))
+        XCTAssertTrue(Parse.mainRulesetHasAppleAnchor("pass in quick on en0 all\npass quick on lo0 all\nanchor \"com.apple/*\" all\n"))
     }
 }
 
@@ -280,6 +296,25 @@ final class RoutesTests: XCTestCase {
         let entries = Routes.parse(netstat)
         XCTAssertEqual(Routes.vpnTunnel(entries), "utun22")
         XCTAssertNil(Routes.vpnTunnel(Routes.parse("default 192.168.1.1 UGScg en0\n")))
+    }
+
+    func testMergedTableNeverNarrowsOnItsOwn() {
+        let n = { (s: String) in IPv4Network(s)! }
+        let full = ProtectedTable(included: [n("0.0.0.0/1"), n("128.0.0.0/1")], excluded: [n("198.51.100.170/32")])
+        // Half the routes vanish on the same tunnel: the other half stays protected.
+        let half = ProtectedTable(included: [n("0.0.0.0/1")], excluded: [n("198.51.100.170/32")])
+        XCTAssertEqual(full.merged(with: half), full)
+        // A new profile adds destinations: protected together with the old ones.
+        let other = ProtectedTable(included: [n("203.0.113.0/24")])
+        let both = full.merged(with: other)
+        XCTAssertEqual(both.included, [n("0.0.0.0/1"), n("128.0.0.0/1"), n("203.0.113.0/24")])
+        // Exemptions are the current ones only.
+        XCTAssertEqual(both.excluded, [])
+        // A network the VPN now sends direct becomes an exemption, never both.
+        let direct = ProtectedTable(included: [n("0.0.0.0/1")], excluded: [n("203.0.113.0/24")])
+        let moved = both.merged(with: direct)
+        XCTAssertFalse(moved.included.contains(n("203.0.113.0/24")))
+        XCTAssertEqual(moved.excluded, [n("203.0.113.0/24")])
     }
 
     func testProtectedTableExcludesDirectRoutes() {
@@ -353,6 +388,17 @@ final class HTTPAndPFParseTests: XCTestCase {
     func testChunkedResponse() {
         let raw = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n7\r\n198.51.\r\n7\r\n100.170\r\n0\r\n\r\n"
         XCTAssertEqual(Parse.httpResponse(raw)?.body, "198.51.100.170")
+    }
+
+    func testMalformedChunkSizes() {
+        let head = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"
+        // Used to overflow Int and crash the root daemon.
+        XCTAssertNil(Parse.httpResponse(head + "7fffffffffffffff\r\n"))
+        XCTAssertNil(Parse.httpResponse(head + "7fffffffffffffff\r\nabc\r\n0\r\n\r\n"))
+        XCTAssertNil(Parse.httpResponse(head + "-1\r\nabc\r\n0\r\n\r\n"))
+        XCTAssertNil(Parse.httpResponse(head + "ffffffffffffffffff\r\nabc\r\n"))
+        XCTAssertNil(Parse.httpResponse(head + "10\r\nshort\r\n"))
+        XCTAssertNil(Parse.httpResponse(head + "5\r\nabc"))
     }
 
     func testBadResponses() {

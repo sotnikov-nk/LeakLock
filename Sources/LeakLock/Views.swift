@@ -355,6 +355,34 @@ struct SettingsView: View {
                         step: 15
                     )
                 }
+                Section {
+                    Stepper(
+                        "Проверять каждые \(config.pfCheckIntervalSeconds) с",
+                        value: Binding(
+                            get: { config.pfCheckIntervalSeconds },
+                            set: { value in model.updateConfig { $0.pfCheckIntervalSeconds = value } }
+                        ),
+                        in: 1...10
+                    )
+                } header: {
+                    Text("Проверка правил pf")
+                } footer: {
+                    Text("Как часто служба проверяет, что pf включён и правила LeakLock не изменила другая программа. Обрыв VPN блокируется мгновенно при любом значении. Больший интервал чуть экономит батарею, но вмешательство в pf будет замечено позже.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let status = model.status, status.config.blockScope == .vpnRoutes {
+                Section {
+                    LabeledContent("Маршрутов VPN под защитой", value: status.protectedCount.map { "\($0)" } ?? "пока нет")
+                    Button("Забыть выученные маршруты") { model.resetLearnedRoutes() }
+                        .glassButtons()
+                } header: {
+                    Text("Адреса из VPN")
+                } footer: {
+                    Text("LeakLock запоминает всё, что VPN когда-либо направлял в туннель, и сам этот список не сокращает. Если вы убрали сайты из списка VPN, а они всё равно блокируются, нажмите кнопку при подключённом VPN: список соберётся заново по текущим маршрутам.")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("Служба и запуск") {

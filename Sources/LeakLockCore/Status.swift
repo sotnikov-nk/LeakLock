@@ -70,6 +70,9 @@ public struct IPCRequest: Codable {
         case status
         case setConfig
         case recheck
+        /// Forget the learned tunnel routes (admin only). Protection never narrows on
+        /// its own, so this is how a smaller split-tunnel list takes effect.
+        case resetLearnedRoutes
     }
 
     public var command: Command

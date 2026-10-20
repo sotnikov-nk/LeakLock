@@ -357,6 +357,19 @@ struct SettingsView: View {
                 }
             }
 
+            if let status = model.status, status.config.blockScope == .vpnRoutes {
+                Section {
+                    LabeledContent("Маршрутов VPN под защитой", value: status.protectedCount.map { "\($0)" } ?? "пока нет")
+                    Button("Забыть выученные маршруты") { model.resetLearnedRoutes() }
+                        .glassButtons()
+                } header: {
+                    Text("Адреса из VPN")
+                } footer: {
+                    Text("LeakLock запоминает всё, что VPN когда-либо направлял в туннель, и сам этот список не сокращает. Если вы убрали сайты из списка VPN, а они всё равно блокируются, нажмите кнопку при подключённом VPN: список соберётся заново по текущим маршрутам.")
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Служба и запуск") {
                 Toggle("Запускать LeakLock при входе", isOn: Binding(
                     get: { model.launchAtLogin },

@@ -47,8 +47,6 @@ public enum Parse {
         }
     }
 
-    /// `pfctl -s rules` (main ruleset) → whether Apple's sub-anchor hook, which our
-    /// anchor hangs off, is still present.
     /// Splits a raw HTTP/1.x response into status code and body, decoding chunked bodies.
     public static func httpResponse(_ raw: String) -> (status: Int, body: String)? {
         guard let split = raw.range(of: "\r\n\r\n") else { return nil }
@@ -71,10 +69,12 @@ public enum Parse {
                 guard let lineEnd = Self.crlf(in: bytes, from: i) else { return nil }
                 let sizeText = String(decoding: bytes[i..<lineEnd], as: UTF8.self)
                     .split(separator: ";").first.map(String.init) ?? ""
-                guard let size = Int(sizeText.trimmingCharacters(in: .whitespaces), radix: 16) else { return nil }
+                // The body is untrusted: reject negative sizes and compare against what
+                // is left instead of adding, so a huge size cannot overflow Int.
+                guard let size = Int(sizeText.trimmingCharacters(in: .whitespaces), radix: 16), size >= 0 else { return nil }
                 if size == 0 { break }
                 let start = lineEnd + 2
-                guard start + size <= bytes.count else { return nil }
+                guard size <= bytes.count - start else { return nil }
                 decoded += bytes[start..<(start + size)]
                 i = start + size + 2
                 guard i <= bytes.count else { break }
@@ -103,10 +103,21 @@ public enum Parse {
         }
     }
 
+    /// `pfctl -s rules` (main ruleset) → whether Apple's sub-anchor hook, which our
+    /// anchor hangs off, is present and actually reached by outbound traffic: it must
+    /// apply to all traffic (not `in` only), and no outbound `quick` pass may come
+    /// before it, since that would decide packets before our rules see them.
     public static func mainRulesetHasAppleAnchor(_ output: String) -> Bool {
-        output.split(whereSeparator: \.isNewline).contains {
-            $0.trimmingCharacters(in: .whitespaces).hasPrefix("anchor \"com.apple/*\"")
+        for raw in output.split(whereSeparator: \.isNewline) {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line == "anchor \"com.apple/*\" all" { return true }
+            let words = line.split(separator: " ")
+            if words.first == "pass", words.contains("quick"), !words.contains("in"),
+               !line.contains(" on lo0 ") {
+                return false
+            }
         }
+        return false
     }
 }
 

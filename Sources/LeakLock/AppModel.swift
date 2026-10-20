@@ -34,6 +34,10 @@ final class AppModel: ObservableObject {
         send(IPCRequest(command: .recheck))
     }
 
+    func resetLearnedRoutes() {
+        send(IPCRequest(command: .resetLearnedRoutes))
+    }
+
     func updateConfig(_ change: (inout GuardConfig) -> Void) {
         guard var config = status?.config else { return }
         change(&config)

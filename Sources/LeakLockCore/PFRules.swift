@@ -60,15 +60,13 @@ public enum PFRules {
     ///   everything (fail closed: we do not know yet what to protect).
     /// - Parameter onLinkV6: the home network's own IPv6 prefixes (see
     ///   `Routes.onLinkIPv6Prefixes`), allowed together with the LAN.
-    /// - Parameter ifBoundStates: bind tunnel connections' pf states to the tunnel
-    ///   interface, so packets of a connection opened through the VPN can never leave
-    ///   through Wi-Fi after the tunnel drops (pf states float across interfaces by
-    ///   default).
     public static func ruleset(
-        mode: FilterMode, config: GuardConfig, protected: ProtectedTable? = nil, ifBoundStates: Bool = true,
-        onLinkV6: [String] = []
+        mode: FilterMode, config: GuardConfig, protected: ProtectedTable? = nil, onLinkV6: [String] = []
     ) -> String {
-        let states = ifBoundStates ? " keep state (if-bound)" : ""
+        // Tunnel connections' states are bound to the tunnel interface, so packets of a
+        // connection opened through the VPN can never leave through Wi-Fi after the
+        // tunnel drops (pf states float across interfaces by default).
+        let states = " keep state (if-bound)"
         let scopedToRoutes = config.blockScope == .vpnRoutes && !(protected?.isEmpty ?? true)
 
         // Local paths pass statelessly. pf's implicit inbound pass creates no state, so
@@ -97,14 +95,17 @@ public enum PFRules {
             "pass out quick inet from any to { \(linkLocalV4.joined(separator: ", ")) }" + local,
         ]
 
+        // The VPN client's own connection passes statelessly too: it is allowed in every
+        // mode anyway, and a stateful rule would not pick it up again mid-stream after
+        // a state flush, so every tightening of the rules would break the VPN itself.
         let servers = config.validServerIPs
         let v4 = servers.filter { $0.family == .v4 }.map(\.description)
         let v6 = servers.filter { $0.family == .v6 }.map(\.description)
         if !v4.isEmpty {
-            lines.append("pass out quick inet from any to { \(v4.joined(separator: ", ")) }")
+            lines.append("pass out quick inet from any to { \(v4.joined(separator: ", ")) }" + local)
         }
         if !v6.isEmpty {
-            lines.append("pass out quick inet6 from any to { \(v6.joined(separator: ", ")) }")
+            lines.append("pass out quick inet6 from any to { \(v6.joined(separator: ", ")) }" + local)
         }
 
         if config.allowDNS {
@@ -152,19 +153,18 @@ extension PFRules {
     ///
     /// - Parameter old: the mode currently loaded; nil after start, enabling, or when
     ///   the rules were found missing (anything could have connected meanwhile).
-    public static func needsStateFlush(from old: FilterMode?, to new: FilterMode, rulesChanged: Bool) -> Bool {
+    /// - Parameter policyChanged: whether the rules outside the tunnel changed (server
+    ///   IPs, LAN/DNS exceptions, block scope, protected table), i.e. the `.locked`
+    ///   ruleset differs. Any such change flushes, whatever the mode: telling a
+    ///   widening from a tightening is not worth the risk of keeping a closed path open.
+    public static func needsStateFlush(from old: FilterMode?, to new: FilterMode, policyChanged: Bool) -> Bool {
         guard let old else { return true }
+        if policyChanged { return true }
         switch (old, new) {
-        case (.locked, .verifying), (.locked, .open):
+        case (.locked, .locked), (.locked, .verifying), (.locked, .open):
             return false
-        case (.verifying(let a), .open(let b)):
+        case (.verifying(let a), .verifying(let b)), (.verifying(let a), .open(let b)), (.open(let a), .open(let b)):
             return a != b
-        case (.open(let a), .open(let b)):
-            return a != b
-        case (.verifying(let a), .verifying(let b)):
-            return a != b || rulesChanged
-        case (.locked, .locked):
-            return rulesChanged
         default:
             return true
         }

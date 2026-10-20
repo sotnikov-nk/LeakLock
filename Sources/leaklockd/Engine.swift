@@ -12,12 +12,13 @@ final class Engine {
     private var config: GuardConfig
     private var tunnel: String?
     /// Destinations the VPN routes into the tunnel; persisted so they stay blocked
-    /// after the VPN goes down.
+    /// after the VPN goes down. Never narrows on its own (see `ProtectedTable.merged`);
+    /// the user shrinks it with `resetLearnedRoutes`.
     private var learned = LearnedRoutesStore.load()
-    /// A table seen while the tunnel is up, adopted only once it has stayed the same
-    /// for `learnSettleSeconds` on a verified tunnel. A half-built table caught while
-    /// the VPN is reconnecting would otherwise be persisted and leave the rest
-    /// unprotected once the VPN goes down.
+    /// A table seen while the tunnel is up. New tunnel destinations are protected at
+    /// once; its exemptions are adopted only once it has stayed the same for
+    /// `learnSettleSeconds` on a verified tunnel, so a half-built table caught while
+    /// the VPN is reconnecting cannot punch holes.
     private var candidate: (table: ProtectedTable, since: Date)?
     private var lastForcedCheck = Date.distantPast
     private let learnSettleSeconds: TimeInterval = 5
@@ -32,7 +33,18 @@ final class Engine {
 
     /// Ruleset text last loaded into the anchor; nil when the anchor is flushed.
     private var appliedRules: String?
+    /// The `.locked` rendering of the policy behind `appliedRules`: what is allowed
+    /// outside the tunnel. A change means connections must be flushed.
+    private var appliedPolicy: String?
+    /// What pf reported for the anchor right after `appliedRules` was loaded.
+    private var appliedSnapshot: String?
     private var appliedMode: FilterMode?
+    /// A state flush that is required but has not succeeded yet.
+    private var flushPending = false
+    /// Why the loaded rules may not be enforced (pf off, unreadable, rewritten by
+    /// someone else). Reported as an error until a health check clears it.
+    private var enforcementError: String?
+    private var lastTamperReload = Date.distantPast
     private var initialized = false
     private var lastHealthCheck = Date.distantPast
     private var pfError: String?
@@ -40,8 +52,6 @@ final class Engine {
     private var mainRulesetError: String?
     private var state: GuardState = .disabled
     private var tickScheduled = false
-    /// Cleared if this pf rejects `keep state (if-bound)`.
-    private var ifBoundSupported = true
 
     init(config: GuardConfig) {
         self.config = config
@@ -92,7 +102,8 @@ final class Engine {
             verifiedTunnel: verifiedTunnel, mismatchedTunnel: mismatchedTunnel
         )
         apply(decision.mode)
-        state = pfError == nil && mainRulesetError == nil ? decision.state : .error
+        let healthy = pfError == nil && mainRulesetError == nil && enforcementError == nil && !flushPending
+        state = decision.mode == nil || healthy ? decision.state : .error
 
         if config.enabled, !config.validServerIPs.isEmpty, let current,
            pfError == nil, !checkInFlight, Date() >= nextCheckAt {
@@ -101,7 +112,21 @@ final class Engine {
     }
 
     private func learn(_ table: ProtectedTable, tunnel: String) {
-        guard !table.isEmpty, table != learned else {
+        guard !table.isEmpty else {
+            candidate = nil
+            return
+        }
+        // Widening is always safe: protect new tunnel destinations right away, keeping
+        // the exemptions we already trust. Not from a tunnel whose exit IP is known to
+        // be someone else's (another VPN): its routes are not ours to keep blocking.
+        let grown = learned.merged(with: ProtectedTable(included: table.included, excluded: learned.excluded))
+        if grown != learned, mismatchedTunnel != tunnel {
+            learned = grown
+            LearnedRoutesStore.save(grown)
+            log("now protecting \(grown.included.count) tunnel routes")
+        }
+        let merged = learned.merged(with: table)
+        guard merged != learned else {
             candidate = nil
             return
         }
@@ -111,10 +136,10 @@ final class Engine {
             return
         }
         guard verifiedTunnel == tunnel, now.timeIntervalSince(c.since) >= learnSettleSeconds else { return }
-        learned = table
+        learned = merged
         candidate = nil
-        LearnedRoutesStore.save(table)
-        log("learned \(table.included.count) tunnel routes, \(table.excluded.count) exclusions")
+        LearnedRoutesStore.save(merged)
+        log("learned \(merged.included.count) tunnel routes, \(merged.excluded.count) exclusions")
     }
 
     private func apply(_ mode: FilterMode?) {
@@ -128,63 +153,88 @@ final class Engine {
                 log("protection disabled; anchor flushed")
             }
             appliedRules = nil
+            appliedPolicy = nil
+            appliedSnapshot = nil
             appliedMode = nil
             pfError = nil
+            enforcementError = nil
+            flushPending = false
             initialized = true
             return
         }
 
         let onLinkV6 = config.allowLAN ? Routing.onLinkV6() : []
-        var rules = PFRules.ruleset(mode: mode, config: config, protected: learned, ifBoundStates: ifBoundSupported, onLinkV6: onLinkV6)
+        let rules = PFRules.ruleset(mode: mode, config: config, protected: learned, onLinkV6: onLinkV6)
+        let policy = PFRules.ruleset(mode: .locked, config: config, protected: learned, onLinkV6: onLinkV6)
         var mustLoad = rules != appliedRules || !initialized
         if healthDue {
             lastHealthCheck = now
-            var tampered = pf.ensureEnabled()
+            var problem: String?
+            let pfState = pf.ensureEnabled()
+            var tampered = pfState.tampered
+            if !pfState.enabled { problem = "pf выключен и не включается" }
             switch pf.checkMainRuleset(repair: mainRulesetError == nil) {
             case .ok: mainRulesetError = nil
             case .repaired: mainRulesetError = nil; tampered = true
             case .broken(let why): mainRulesetError = why
             }
-            if pf.loadedRuleCount() == 0 {
-                if appliedRules != nil { log("anchor rules disappeared; reloading") }
-                tampered = true
+            if appliedRules != nil {
+                // Not just "some rules are loaded": exactly ours, with the table intact.
+                switch pf.anchorSnapshot() {
+                case nil:
+                    problem = problem ?? "не удаётся прочитать правила pf"
+                case let snapshot? where snapshot != appliedSnapshot:
+                    log("anchor rules or table changed behind our back; reloading")
+                    tampered = true
+                default:
+                    break
+                }
             }
             if tampered {
-                // Anything may have connected while the rules were off: start over.
-                appliedMode = nil
                 mustLoad = true
+                if now.timeIntervalSince(lastTamperReload) < 5 {
+                    // Changed again right after a reload: something keeps rewriting pf.
+                    // Keep reloading, but do not cut every connection each second.
+                    problem = problem ?? "правила LeakLock в pf постоянно меняет другая программа"
+                } else {
+                    // Anything may have connected while the rules were off: start over.
+                    appliedMode = nil
+                }
+                lastTamperReload = now
             }
+            enforcementError = problem
         }
-        guard mustLoad else { return }
 
-        pf.ensureEnabled()
-        var result = pf.load(rules)
-        if !result.ok, ifBoundSupported, rules.contains("if-bound") {
-            log("pf rejected if-bound states (\(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))); retrying without")
-            let fallback = PFRules.ruleset(mode: mode, config: config, protected: learned, ifBoundStates: false, onLinkV6: onLinkV6)
-            let retry = pf.load(fallback)
-            // Only a load that works without if-bound proves the kernel lacks it; a
-            // failure for any other reason must not weaken later rulesets.
-            if retry.ok {
-                ifBoundSupported = false
-                rules = fallback
-                result = retry
+        if mustLoad {
+            pf.ensureEnabled()
+            // No fallback without `keep state (if-bound)`: macOS pf supports it, and
+            // without it tunnel connections could carry on over Wi-Fi. If pf rejects
+            // the rules, the previous ones stay loaded and the menu shows the error.
+            let result = pf.load(rules)
+            if result.ok {
+                if PFRules.needsStateFlush(from: appliedMode, to: mode, policyChanged: policy != appliedPolicy) {
+                    flushPending = true
+                }
+                if appliedRules != rules { log("loaded rules for mode \(mode)") }
+                appliedRules = rules
+                appliedPolicy = policy
+                appliedMode = mode
+                appliedSnapshot = pf.anchorSnapshot()
+                pfError = nil
+                initialized = true
+            } else {
+                pfError = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                log("pfctl load failed: \(pfError ?? "")")
             }
         }
-        if result.ok {
-            let flush = PFRules.needsStateFlush(from: appliedMode, to: mode, rulesChanged: rules != appliedRules)
-            if appliedRules != rules { log("loaded rules for mode \(mode)") }
-            appliedRules = rules
-            appliedMode = mode
-            pfError = nil
-            initialized = true
-            if flush {
-                pf.flushStates()
+
+        if flushPending {
+            if pf.flushStates() {
+                flushPending = false
                 log("pf states flushed")
+            } else {
+                log("pfctl -F states failed; will retry")
             }
-        } else {
-            pfError = result.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-            log("pfctl load failed: \(pfError ?? "")")
         }
     }
 
@@ -258,6 +308,16 @@ final class Engine {
                     tick()
                 }
                 return IPCResponse(ok: true, status: makeStatus())
+            case .resetLearnedRoutes:
+                guard peerIsAdmin else {
+                    return IPCResponse(ok: false, error: "Менять настройки может только администратор Mac.")
+                }
+                learned = ProtectedTable()
+                candidate = nil
+                LearnedRoutesStore.save(learned)
+                log("learned routes reset")
+                tick()
+                return IPCResponse(ok: true, status: makeStatus())
             case .setConfig:
                 guard peerIsAdmin else {
                     return IPCResponse(ok: false, error: "Менять настройки может только администратор Mac.")
@@ -285,7 +345,11 @@ final class Engine {
 
     private func makeStatus() -> GuardStatus {
         var message = state.title(scope: config.blockScope)
-        if state == .error, let why = pfError ?? mainRulesetError { message += ": \(why)" }
+        if state == .error {
+            let why = pfError ?? mainRulesetError ?? enforcementError
+                ?? (flushPending ? "не удалось сбросить старые соединения" : nil)
+            if let why { message += ": \(why)" }
+        }
         if state == .verifying, let lastCheckError, consecutiveFailures > 0 {
             message = "Не удалось проверить IP: \(lastCheckError)"
         }

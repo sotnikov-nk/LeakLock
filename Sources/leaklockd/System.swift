@@ -233,10 +233,16 @@ enum ExternalIP {
     private static let ipBoundIF: Int32 = 25
     private static let timeoutSeconds = 5
 
-    /// Asks IP-echo services which address `tunnel` exits from; first answer wins.
-    /// Every request goes through a socket bound to `tunnel`, so it cannot leave
-    /// through any other interface: if the tunnel is gone, the check simply fails.
-    static func fetch(tunnel: String, completion: @escaping (Result<IPAddress, Failure>) -> Void) {
+    /// Asks IP-echo services which address `tunnel` exits from. Every request goes
+    /// through a socket bound to `tunnel`, so it cannot leave through any other
+    /// interface: if the tunnel is gone, the check simply fails.
+    ///
+    /// The first answer that `accept`s wins; without one, the first answer is returned.
+    /// A client that routes inside the tunnel (Incy with the RoscomVPN profile) may send
+    /// some echo services direct on purpose, so one answer with the home IP does not
+    /// mean the tunnel leads elsewhere while another service sees the VPN server.
+    static func fetch(tunnel: String, accept: @escaping (IPAddress) -> Bool,
+                      completion: @escaping (Result<IPAddress, Failure>) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             let index = if_nametoindex(tunnel)
             guard index != 0 else {
@@ -244,16 +250,24 @@ enum ExternalIP {
                 return
             }
             var errors: [String] = []
+            var firstAnswer: IPAddress?
             for endpoint in PFRules.ipCheckEndpoints {
                 switch ask(endpoint, interfaceIndex: index) {
                 case .success(let ip):
-                    completion(.success(ip))
-                    return
+                    if accept(ip) {
+                        completion(.success(ip))
+                        return
+                    }
+                    firstAnswer = firstAnswer ?? ip
                 case .failure(let reason):
                     errors.append("\(endpoint.host): \(reason)")
                 }
             }
-            completion(.failure(.noAnswer(errors.joined(separator: "; "))))
+            if let firstAnswer {
+                completion(.success(firstAnswer))
+            } else {
+                completion(.failure(.noAnswer(errors.joined(separator: "; "))))
+            }
         }
     }
 

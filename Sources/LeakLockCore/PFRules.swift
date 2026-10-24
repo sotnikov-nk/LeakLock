@@ -23,10 +23,14 @@ public enum PFRules {
     /// bound to the tunnel interface (IP_BOUND_IF), so a check can only ever leave
     /// through the tunnel being verified: never through Wi-Fi, whatever the routing
     /// table says. Plain HTTP is enough: the request travels inside the tunnel.
+    ///
+    /// Services that popular routing profiles send direct come last: RoscomVPN (Incy)
+    /// routes ipify, checkip.amazonaws.com and ifconfig.me outside the VPN on purpose.
     public static let ipCheckEndpoints: [IPCheckEndpoint] = [
+        IPCheckEndpoint(host: "icanhazip.com", path: "/"),
+        IPCheckEndpoint(host: "ident.me", path: "/"),
         IPCheckEndpoint(host: "api.ipify.org", path: "/"),
         IPCheckEndpoint(host: "checkip.amazonaws.com", path: "/"),
-        IPCheckEndpoint(host: "icanhazip.com", path: "/"),
         IPCheckEndpoint(host: "ifconfig.me", path: "/ip"),
     ]
 

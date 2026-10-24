@@ -263,7 +263,8 @@ final class Engine {
 
     private func startCheck(tunnel: String) {
         checkInFlight = true
-        ExternalIP.fetch(tunnel: tunnel) { [weak self] result in
+        let config = self.config
+        ExternalIP.fetch(tunnel: tunnel, accept: { Decision.ipMatches($0, config: config) }) { [weak self] result in
             guard let self else { return }
             self.queue.async { self.finishCheck(tunnel: tunnel, result: result) }
         }
@@ -404,7 +405,7 @@ final class Engine {
             lastCheck: lastCheck,
             message: message,
             protectedCount: config.blockScope == .vpnRoutes && !learned.isEmpty ? learned.included.count : nil,
-            clientRoutingTrusted: trustedClientConnected
+            clientRoutingTrusted: trustedClientConnected && state == .protected
         )
     }
 }

@@ -24,6 +24,12 @@ public struct GuardConfig: Codable, Equatable {
     /// Allow DNS (port 53) to any resolver while the VPN is down. Needed only when the
     /// VPN client resolves the server by host name.
     public var allowDNS: Bool
+    /// While the tunnel is verified, let traffic leave outside it too. For clients that
+    /// split traffic inside the tunnel process (Incy's Direct rules: the client itself
+    /// sends those connections via Wi-Fi), which pf cannot tell apart from a leak. Safe
+    /// only together with the client's own kill switch, which keeps other apps in the
+    /// tunnel while it is up; once the tunnel drops or is unverified, this has no effect.
+    public var trustClientRouting: Bool
     /// How often the external IP is re-checked while the tunnel is open, in seconds.
     public var recheckIntervalSeconds: Int
     /// How often the daemon verifies that pf is on and its rules are intact, in
@@ -37,6 +43,7 @@ public struct GuardConfig: Codable, Equatable {
         vpnServerIPs: [String] = [],
         allowLAN: Bool = false,
         allowDNS: Bool = false,
+        trustClientRouting: Bool = false,
         recheckIntervalSeconds: Int = 60,
         pfCheckIntervalSeconds: Int = 1
     ) {
@@ -45,6 +52,7 @@ public struct GuardConfig: Codable, Equatable {
         self.vpnServerIPs = vpnServerIPs
         self.allowLAN = allowLAN
         self.allowDNS = allowDNS
+        self.trustClientRouting = trustClientRouting
         self.recheckIntervalSeconds = recheckIntervalSeconds
         self.pfCheckIntervalSeconds = pfCheckIntervalSeconds
     }
@@ -58,6 +66,7 @@ public struct GuardConfig: Codable, Equatable {
         vpnServerIPs = try c.decodeIfPresent([String].self, forKey: .vpnServerIPs) ?? d.vpnServerIPs
         allowLAN = try c.decodeIfPresent(Bool.self, forKey: .allowLAN) ?? d.allowLAN
         allowDNS = try c.decodeIfPresent(Bool.self, forKey: .allowDNS) ?? d.allowDNS
+        trustClientRouting = try c.decodeIfPresent(Bool.self, forKey: .trustClientRouting) ?? d.trustClientRouting
         recheckIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .recheckIntervalSeconds)
             ?? d.recheckIntervalSeconds
         pfCheckIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .pfCheckIntervalSeconds)

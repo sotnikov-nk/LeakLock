@@ -130,6 +130,11 @@ struct MenuView: View {
             Toggle("DNS без VPN", isOn: binding(\.allowDNS))
                 .toggleStyle(.switch)
                 .controlSize(.small)
+                .padding(.bottom, 6)
+            Toggle("Доверять маршрутизации клиента", isOn: binding(\.trustClientRouting))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .help("Пока VPN проверен, не блокировать трафик мимо туннеля: прямые соединения, которые отправляет сам VPN-клиент (списки Direct в Incy). Включайте только вместе с kill switch клиента.")
                 .padding(.bottom, 10)
         }
         .padding(.horizontal, 14)

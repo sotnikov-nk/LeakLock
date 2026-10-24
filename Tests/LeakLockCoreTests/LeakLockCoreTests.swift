@@ -329,6 +329,30 @@ final class RoutesTests: XCTestCase {
         XCTAssertTrue(rules.contains("block return out quick inet from any to <leaklock_vpn>"))
     }
 
+    func testTrustedClientRoutingOpensOnlyWhileVerified() {
+        let table = Routes.protectedTable(Routes.parse(incyNetstat), tunnel: "utun4")
+        let config = GuardConfig(enabled: true, blockScope: .vpnRoutes, vpnServerIPs: ["198.51.100.170"],
+                                 trustClientRouting: true)
+        let open = PFRules.ruleset(mode: .open(tunnel: "utun4"), config: config, protected: table)
+        XCTAssertTrue(open.contains("pass out quick all keep state (if-bound)"))
+        let lines = open.split(separator: "\n").map(String.init)
+        XCTAssertLessThan(lines.firstIndex(of: "pass out quick all keep state (if-bound)")!,
+                          lines.firstIndex { $0.hasPrefix("block") }!)
+        for mode in [FilterMode.locked, .verifying(tunnel: "utun4")] {
+            XCTAssertFalse(PFRules.ruleset(mode: mode, config: config, protected: table).contains("pass out quick all keep"))
+        }
+        // Switching the setting changes the policy, so the daemon flushes direct states.
+        var off = config
+        off.trustClientRouting = false
+        XCTAssertNotEqual(PFRules.ruleset(mode: .locked, config: config, protected: table),
+                          PFRules.ruleset(mode: .locked, config: off, protected: table))
+        XCTAssertFalse(PFRules.ruleset(mode: .open(tunnel: "utun4"), config: off, protected: table)
+            .contains("pass out quick all keep"))
+        // Older config files load with the setting off.
+        let old = try! JSONDecoder().decode(GuardConfig.self, from: Data(#"{"enabled":true}"#.utf8))
+        XCTAssertFalse(old.trustClientRouting)
+    }
+
     func testMergedTableNeverNarrowsOnItsOwn() {
         let n = { (s: String) in IPv4Network(s)! }
         let full = ProtectedTable(included: [n("0.0.0.0/1"), n("128.0.0.0/1")], excluded: [n("198.51.100.170/32")])

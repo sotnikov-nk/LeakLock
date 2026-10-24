@@ -77,6 +77,11 @@ public enum PFRules {
         let local = " no state"
 
         var lines: [String] = ["# LeakLock \(LeakLockVersion.current): generated, do not edit"]
+        if config.trustClientRouting {
+            // Also in the `.locked` rendering, which the daemon compares to decide on a
+            // state flush: switching the setting off must end the direct connections.
+            lines.append("# client routing trusted while verified")
+        }
         if scopedToRoutes, let protected {
             lines.append("table <\(anchorTable)> { \(protected.pfEntries.joined(separator: ", ")) }")
         }
@@ -129,6 +134,11 @@ public enum PFRules {
         case .open(let tunnel):
             if isTunnelInterface(tunnel) {
                 lines.append("pass out quick on \(tunnel) all" + states)
+                if config.trustClientRouting {
+                    // The client's direct connections. Tunnel loss or a failed check
+                    // drops back to `.locked`/`.verifying`, which flushes these states.
+                    lines.append("pass out quick all" + states)
+                }
             }
         }
 

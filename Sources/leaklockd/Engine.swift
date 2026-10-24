@@ -23,6 +23,9 @@ final class Engine {
     private var lastForcedCheck = Date.distantPast
     private let learnSettleSeconds: TimeInterval = 5
     private var verifiedTunnel: String?
+    /// A client listed in `ClientTrust` is the connected VPN; checked only while the
+    /// setting is on and a tunnel is up.
+    private var trustedClientConnected = false
     private var mismatchedTunnel: String?
     private var externalIP: String?
     private var lastCheck: Date?
@@ -102,6 +105,13 @@ final class Engine {
             candidate = nil
         }
 
+        let trusted = config.enabled && config.trustClientRouting && current != nil
+            && ClientTrust.isTrustedClientConnected(Routing.vpnServices())
+        if trusted != trustedClientConnected {
+            log("client routing \(trusted ? "trusted" : "not trusted")")
+            trustedClientConnected = trusted
+        }
+
         let decision = Decision.decide(
             config: config, tunnel: current,
             verifiedTunnel: verifiedTunnel, mismatchedTunnel: mismatchedTunnel
@@ -171,8 +181,12 @@ final class Engine {
         }
 
         let onLinkV6 = config.allowLAN ? Routing.onLinkV6() : []
-        let rules = PFRules.ruleset(mode: mode, config: config, protected: learned, onLinkV6: onLinkV6)
-        let policy = PFRules.ruleset(mode: .locked, config: config, protected: learned, onLinkV6: onLinkV6)
+        // The setting only counts while a trusted client is connected; its change also
+        // changes `policy`, so connections are flushed when trust ends.
+        var enforced = config
+        enforced.trustClientRouting = trustedClientConnected
+        let rules = PFRules.ruleset(mode: mode, config: enforced, protected: learned, onLinkV6: onLinkV6)
+        let policy = PFRules.ruleset(mode: .locked, config: enforced, protected: learned, onLinkV6: onLinkV6)
         var mustLoad = rules != appliedRules || !initialized
         if healthDue {
             lastHealthCheck = now
@@ -389,7 +403,8 @@ final class Engine {
             externalIP: externalIP,
             lastCheck: lastCheck,
             message: message,
-            protectedCount: config.blockScope == .vpnRoutes && !learned.isEmpty ? learned.included.count : nil
+            protectedCount: config.blockScope == .vpnRoutes && !learned.isEmpty ? learned.included.count : nil,
+            clientRoutingTrusted: trustedClientConnected
         )
     }
 }

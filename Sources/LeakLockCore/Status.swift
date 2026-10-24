@@ -37,6 +37,9 @@ public struct GuardStatus: Codable, Equatable {
     /// Number of learned tunnel routes that are blocked outside the tunnel
     /// (`.vpnRoutes` only).
     public var protectedCount: Int?
+    /// Whether the client's own routing is trusted right now (setting on and a trusted
+    /// client connected). Optional so an app can still read an older daemon's status.
+    public var clientRoutingTrusted: Bool?
     public var daemonVersion: String
 
     public init(
@@ -48,6 +51,7 @@ public struct GuardStatus: Codable, Equatable {
         lastCheck: Date? = nil,
         message: String = "",
         protectedCount: Int? = nil,
+        clientRoutingTrusted: Bool? = nil,
         daemonVersion: String = LeakLockVersion.current
     ) {
         self.state = state
@@ -58,6 +62,7 @@ public struct GuardStatus: Codable, Equatable {
         self.lastCheck = lastCheck
         self.message = message
         self.protectedCount = protectedCount
+        self.clientRoutingTrusted = clientRoutingTrusted
         self.daemonVersion = daemonVersion
     }
 }

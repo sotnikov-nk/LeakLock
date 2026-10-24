@@ -348,6 +348,18 @@ final class RoutesTests: XCTestCase {
                           PFRules.ruleset(mode: .locked, config: off, protected: table))
         XCTAssertFalse(PFRules.ruleset(mode: .open(tunnel: "utun4"), config: off, protected: table)
             .contains("pass out quick all keep"))
+        // Trust needs Incy itself to be the connected VPN.
+        let scutil = """
+        Available network connection services in the current set (*=enabled):
+        * (Disconnected)   CF01C6CF-0000-0000-0000-000000000001 VPN (org.outline.macos.client) "Outline"    [VPN:org.outline.macos.client]
+        * (Connected)      AAA04198-0000-0000-0000-000000000002 VPN (llc.itdev.incy) "incy"                  [VPN:llc.itdev.incy]
+        """
+        XCTAssertEqual(Parse.connectedVPNClients(scutil), ["llc.itdev.incy"])
+        XCTAssertTrue(ClientTrust.isTrustedClientConnected(scutil))
+        XCTAssertFalse(ClientTrust.isTrustedClientConnected(scutil.replacingOccurrences(of: "(Connected)", with: "(Disconnected)")))
+        XCTAssertFalse(ClientTrust.isTrustedClientConnected(
+            "* (Connected)  ID VPN (com.example.vpn) \"x [VPN:llc.itdev.incy]\"  [VPN:com.example.vpn]\n"))
+        XCTAssertFalse(ClientTrust.isTrustedClientConnected(""))
         // Older config files load with the setting off.
         let old = try! JSONDecoder().decode(GuardConfig.self, from: Data(#"{"enabled":true}"#.utf8))
         XCTAssertFalse(old.trustClientRouting)

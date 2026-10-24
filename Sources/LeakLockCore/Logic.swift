@@ -26,6 +26,18 @@ public enum Parse {
         traceIP(body) ?? IPAddress(body.trimmingCharacters(in: .whitespacesAndNewlines))
     }
 
+    /// `scutil --nc list` → bundle IDs of the connected VPN services, from the trailing
+    /// `[VPN:<bundle id>]` of each `(Connected)` line. The last bracket is used, since the
+    /// quoted service name before it is free text.
+    public static func connectedVPNClients(_ output: String) -> [String] {
+        output.split(whereSeparator: \.isNewline).compactMap { line in
+            guard line.contains("(Connected)"), let open = line.range(of: "[VPN:", options: .backwards),
+                  let close = line[open.upperBound...].firstIndex(of: "]") else { return nil }
+            let id = String(line[open.upperBound..<close])
+            return id.isEmpty ? nil : id
+        }
+    }
+
     /// `pfctl -E` prints `Token : 1234` (to stderr).
     public static func pfToken(_ output: String) -> String? {
         for line in output.split(whereSeparator: \.isNewline) {

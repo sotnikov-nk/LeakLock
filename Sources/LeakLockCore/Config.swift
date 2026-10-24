@@ -24,11 +24,13 @@ public struct GuardConfig: Codable, Equatable {
     /// Allow DNS (port 53) to any resolver while the VPN is down. Needed only when the
     /// VPN client resolves the server by host name.
     public var allowDNS: Bool
-    /// While the tunnel is verified, let traffic leave outside it too. For clients that
-    /// split traffic inside the tunnel process (Incy's Direct rules: the client itself
-    /// sends those connections via Wi-Fi), which pf cannot tell apart from a leak. Safe
-    /// only together with the client's own kill switch, which keeps other apps in the
-    /// tunnel while it is up; once the tunnel drops or is unverified, this has no effect.
+    /// While the tunnel is verified and one of `ClientTrust.bundleIDs` is the connected
+    /// VPN, let traffic leave outside the tunnel too. For clients that split traffic
+    /// inside the tunnel process (Incy's Direct rules: the client itself sends those
+    /// connections via Wi-Fi), which pf cannot tell apart from a leak. Safe only together
+    /// with the client's own kill switch, which keeps other apps in the tunnel while it
+    /// is up; with any other client, or once the tunnel drops or is unverified, this has
+    /// no effect.
     public var trustClientRouting: Bool
     /// How often the external IP is re-checked while the tunnel is open, in seconds.
     public var recheckIntervalSeconds: Int
@@ -92,6 +94,17 @@ public struct GuardConfig: Codable, Equatable {
         copy.recheckIntervalSeconds = min(max(recheckIntervalSeconds, 15), 3600)
         copy.pfCheckIntervalSeconds = min(max(pfCheckIntervalSeconds, 1), 10)
         return copy
+    }
+}
+
+/// VPN clients whose own routing `GuardConfig.trustClientRouting` may trust: Network
+/// Extension clients with a kill switch that keeps other apps inside the tunnel.
+public enum ClientTrust {
+    public static let bundleIDs = ["llc.itdev.incy"]
+
+    /// Whether `scutil --nc list` shows one of the trusted clients connected.
+    public static func isTrustedClientConnected(_ scutilOutput: String) -> Bool {
+        Parse.connectedVPNClients(scutilOutput).contains { bundleIDs.contains($0) }
     }
 }
 

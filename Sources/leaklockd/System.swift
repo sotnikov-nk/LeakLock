@@ -168,6 +168,11 @@ enum Routing {
         return r.ok ? Routes.parse(r.stdout) : []
     }
 
+    /// `scutil --nc list`: the system's VPN services and their state.
+    static func vpnServices() -> String {
+        Shell.run("/usr/sbin/scutil", ["--nc", "list"], timeout: 5).stdout
+    }
+
     static func onLinkV6() -> [String] {
         let r = Shell.run("/usr/sbin/netstat", ["-rn", "-f", "inet6"], timeout: 5)
         return r.ok ? Routes.onLinkIPv6Prefixes(r.stdout) : []

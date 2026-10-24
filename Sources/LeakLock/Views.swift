@@ -131,10 +131,14 @@ struct MenuView: View {
                 .toggleStyle(.switch)
                 .controlSize(.small)
                 .padding(.bottom, 6)
-            Toggle("Доверять маршрутизации клиента", isOn: binding(\.trustClientRouting))
+            Toggle("Доверять маршрутизации Incy", isOn: binding(\.trustClientRouting))
                 .toggleStyle(.switch)
                 .controlSize(.small)
-                .help("Пока VPN проверен, не блокировать трафик мимо туннеля: прямые соединения, которые отправляет сам VPN-клиент (списки Direct в Incy). Включайте только вместе с kill switch клиента.")
+            Text(trustClientRoutingNote)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.bottom, 10)
         }
         .padding(.horizontal, 14)
@@ -253,6 +257,15 @@ struct MenuView: View {
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 4)
+    }
+
+    private var trustClientRoutingNote: String {
+        var note = "Пока Incy подключён и внешний IP проверен, сайты из списков Direct в Incy "
+            + "открываются напрямую, а не блокируются. Включайте вместе с kill switch в Incy: "
+            + "он не даёт другим программам обходить туннель. С другими VPN-клиентами настройка "
+            + "не действует."
+        if model.status?.clientRoutingTrusted == true { note += "\nСейчас действует." }
+        return note
     }
 
     private func binding(_ keyPath: WritableKeyPath<GuardConfig, Bool>) -> Binding<Bool> {

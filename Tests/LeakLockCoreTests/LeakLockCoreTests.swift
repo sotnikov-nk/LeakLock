@@ -298,6 +298,37 @@ final class RoutesTests: XCTestCase {
         XCTAssertNil(Routes.vpnTunnel(Routes.parse("default 192.168.1.1 UGScg en0\n")))
     }
 
+    // Incy from the App Store (Network Extension packet tunnel, Xray) with "global
+    // proxy" on: a plain default route into the tunnel instead of 0/1 + 128/1, a
+    // 198.18/16 interface address and many cloned host routes. The server's own
+    // connection is excluded by the system, so it has no route of its own.
+    private let incyNetstat = """
+    Destination        Gateway            Flags               Netif Expire
+    default            link#26            UCSg                utun4
+    default            192.168.1.1        UGScIg                en0
+    17.248.150.3       link#26            UHW3Ig              utun4     26
+    149.154.167.41     link#26            UHWIig              utun4
+    192.168.1          link#15            UCS                   en0      !
+    198.18.0.1         198.18.0.1         UH                  utun4
+    198.18.0.2         link#26            UHWIig              utun4
+    224.0.0/4          link#26            UmCSI               utun4
+    240.0.0.17         link#26            UHWIig              utun4
+    255.255.255.255/32 link#26            UCSI                utun4
+    """
+
+    func testIncyNetworkExtensionTunnel() {
+        let entries = Routes.parse(incyNetstat)
+        XCTAssertEqual(Routes.vpnTunnel(entries), "utun4")
+        let table = Routes.protectedTable(entries, tunnel: "utun4")
+        XCTAssertEqual(table.included.map(\.description), ["0.0.0.0/0", "198.18.0.1/32"])
+        XCTAssertEqual(table.excluded.map(\.description), ["192.168.1.0/24"])
+        let config = GuardConfig(enabled: true, blockScope: .vpnRoutes, vpnServerIPs: ["198.51.100.170"])
+        let rules = PFRules.ruleset(mode: .open(tunnel: "utun4"), config: config, protected: table)
+        XCTAssertTrue(rules.contains("pass out quick inet from any to { 198.51.100.170 }"))
+        XCTAssertTrue(rules.contains("pass out quick on utun4 all"))
+        XCTAssertTrue(rules.contains("block return out quick inet from any to <leaklock_vpn>"))
+    }
+
     func testMergedTableNeverNarrowsOnItsOwn() {
         let n = { (s: String) in IPv4Network(s)! }
         let full = ProtectedTable(included: [n("0.0.0.0/1"), n("128.0.0.0/1")], excluded: [n("198.51.100.170/32")])

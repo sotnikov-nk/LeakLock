@@ -19,6 +19,11 @@ final class AppModel: ObservableObject {
     private var configGeneration = 0
 
     init() {
+        if UserDefaults.standard.bool(forKey: Updater.pendingLoginItemKey) {
+            UserDefaults.standard.removeObject(forKey: Updater.pendingLoginItemKey)
+            try? SMAppService.mainApp.unregister()
+            try? SMAppService.mainApp.register()
+        }
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.refresh() }

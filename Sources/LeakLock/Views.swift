@@ -15,7 +15,7 @@ struct LeakLockApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Настройки LeakLock", id: "settings") {
+        Window("Настройки Breaker", id: "settings") {
             SettingsView().environmentObject(model).environmentObject(updater)
         }
         .windowResizability(.contentSize)
@@ -39,14 +39,14 @@ struct MenuBarIcon: View {
 
     static func image(_ symbol: String) -> NSImage {
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
-        guard let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: "LeakLock")?
+        guard let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: "Breaker")?
             .withSymbolConfiguration(config) else { return NSImage() }
         let image = NSImage(size: glyph.size, flipped: false) { rect in
             glyph.draw(in: rect)
             return true
         }
         image.isTemplate = true
-        image.accessibilityDescription = "LeakLock"
+        image.accessibilityDescription = "Breaker"
         return image
     }
 }
@@ -407,7 +407,7 @@ struct SettingsView: View {
                 } header: {
                     Text("Проверка правил pf")
                 } footer: {
-                    Text("Как часто служба проверяет, что pf включён и правила LeakLock не изменила другая программа. Обрыв VPN блокируется мгновенно при любом значении. Больший интервал чуть экономит батарею, но вмешательство в pf будет замечено позже.")
+                    Text("Как часто служба проверяет, что pf включён и правила Breaker не изменила другая программа. Обрыв VPN блокируется мгновенно при любом значении. Больший интервал чуть экономит батарею, но вмешательство в pf будет замечено позже.")
                         .foregroundStyle(.secondary)
                 }
             }
@@ -427,7 +427,7 @@ struct SettingsView: View {
             }
 
             Section("Служба и запуск") {
-                Toggle("Запускать LeakLock при входе", isOn: Binding(
+                Toggle("Запускать Breaker при входе", isOn: Binding(
                     get: { model.launchAtLogin },
                     set: { model.launchAtLogin = $0 }
                 ))

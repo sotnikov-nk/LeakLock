@@ -1,5 +1,7 @@
 #!/bin/bash
-# Builds "LeakLock.app" (universal, ad-hoc signed) and a DMG into ./build.
+# Builds "Breaker.app" (universal, ad-hoc signed) and a DMG into ./build.
+# The app was called LeakLock up to 0.4.4: the repository, bundle identifiers, the
+# service and the DMG's file name keep that name, since installed versions look for it.
 # Usage: scripts/build-app.sh [version]
 set -euo pipefail
 
@@ -7,7 +9,7 @@ cd "$(dirname "$0")/.."
 VERSION="${1:-0.1.0}"
 BUILD_NUMBER="${GITHUB_RUN_NUMBER:-1}"
 OUT=build
-APP="$OUT/LeakLock.app"
+APP="$OUT/Breaker.app"
 DMG="$OUT/LeakLock-$VERSION.dmg"
 
 ARCHS=(--arch arm64 --arch x86_64)
@@ -36,8 +38,12 @@ codesign --verify --strict --verbose=2 "$APP"
 STAGE="$OUT/dmg"
 mkdir -p "$STAGE"
 cp -R "$APP" "$STAGE/"
+# The updater of 0.4.4 and earlier copies "LeakLock.app" out of the DMG, so the same
+# bundle is also there under its old name, hidden in Finder.
+cp -R "$APP" "$STAGE/LeakLock.app"
+chflags hidden "$STAGE/LeakLock.app"
 ln -s /Applications "$STAGE/Applications"
-hdiutil create -volname "LeakLock" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
+hdiutil create -volname "Breaker" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
 rm -rf "$STAGE"
 
 echo "Built $APP"

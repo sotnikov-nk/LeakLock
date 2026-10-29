@@ -7,7 +7,7 @@ enum DaemonClientError: LocalizedError {
 
     var errorDescription: String? {
         switch self {
-        case .unreachable: return "Служба LeakLock не отвечает."
+        case .unreachable: return "Служба Breaker не отвечает."
         case .io(let detail): return "Ошибка связи со службой: \(detail)"
         }
     }

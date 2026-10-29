@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import ServiceManagement
 import LeakLockCore
 
 /// Checks GitHub releases and replaces the app with the DMG of the latest one.
@@ -23,6 +24,9 @@ final class Updater: ObservableObject {
     /// Set right before relaunching into a new version, so that version updates the
     /// service as soon as it starts (the service is a separate binary under root).
     static let pendingServiceUpdateKey = "pendingServiceUpdate"
+    /// Set when the update moves the app (LeakLock.app → Breaker.app): the login item
+    /// is registered for the old path and is renewed on the next start.
+    static let pendingLoginItemKey = "pendingLoginItem"
 
     @Published private(set) var phase: Phase = .idle
     private var timer: Timer?
@@ -112,8 +116,12 @@ final class Updater: ObservableObject {
         try run("/usr/bin/hdiutil", ["attach", dmg.path, "-nobrowse", "-readonly", "-noautoopen", "-mountpoint", mount.path])
         defer { _ = try? run("/usr/bin/hdiutil", ["detach", mount.path, "-force"]) }
 
-        let app = work.appendingPathComponent("LeakLock.app")
-        try run("/usr/bin/ditto", [mount.appendingPathComponent("LeakLock.app").path, app.path])
+        // Called LeakLock up to 0.4.4; its DMGs only have the old name.
+        let name = ["Breaker.app", "LeakLock.app"].first {
+            FileManager.default.fileExists(atPath: mount.appendingPathComponent($0).path)
+        } ?? "Breaker.app"
+        let app = work.appendingPathComponent(name)
+        try run("/usr/bin/ditto", [mount.appendingPathComponent(name).path, app.path])
         let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))
         guard info?["CFBundleIdentifier"] as? String == identifier,
               info?["CFBundleShortVersionString"] as? String == version
@@ -128,29 +136,39 @@ final class Updater: ObservableObject {
     private static func relaunch(into staged: URL) throws {
         let target = Bundle.main.bundleURL
         let fm = FileManager.default
+        // An install from before the rename moves to Breaker.app next to it, unless
+        // something else already has that name.
+        var final = target
+        if target.lastPathComponent == "LeakLock.app" {
+            let renamed = target.deletingLastPathComponent().appendingPathComponent("Breaker.app")
+            if !fm.fileExists(atPath: renamed.path) { final = renamed }
+        }
         guard fm.isWritableFile(atPath: target.deletingLastPathComponent().path), fm.isWritableFile(atPath: target.path) else {
             throw Failure("нет прав на запись в \(target.deletingLastPathComponent().path). Установите новую версию из DMG вручную")
         }
         let script = """
         while kill -0 "$1" 2>/dev/null; do sleep 0.2; done
-        NEW="$3.update"; OLD="$3.old"
+        NEW="$5.update"; OLD="$3.old"; APP="$3"
         rm -rf "$NEW" "$OLD"
         if /usr/bin/ditto "$2" "$NEW" && mv "$3" "$OLD"; then
-            if mv "$NEW" "$3"; then rm -rf "$OLD"; else mv "$OLD" "$3"; fi
+            if mv "$NEW" "$5"; then rm -rf "$OLD"; APP="$5"; else mv "$OLD" "$3"; fi
         fi
         rm -rf "$NEW" "$4"
-        /usr/bin/xattr -cr "$3"
-        /usr/bin/open "$3"
+        /usr/bin/xattr -cr "$APP"
+        /usr/bin/open "$APP"
         """
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = [
             "-c", script, "sh",
             String(ProcessInfo.processInfo.processIdentifier), staged.path, target.path,
-            staged.deletingLastPathComponent().path,
+            staged.deletingLastPathComponent().path, final.path,
         ]
         try process.run()
         UserDefaults.standard.set(true, forKey: pendingServiceUpdateKey)
+        if final != target, SMAppService.mainApp.status == .enabled {
+            UserDefaults.standard.set(true, forKey: pendingLoginItemKey)
+        }
         NSApp.terminate(nil)
     }
 

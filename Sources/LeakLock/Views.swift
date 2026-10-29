@@ -24,33 +24,25 @@ struct LeakLockApp: App {
 
 /// Status-bar glyph. SwiftUI renders `Image(systemName:)` in the menu bar at the small
 /// text size, which looks undersized next to other icons, so the symbol is drawn at an
-/// explicit size as a template image.
+/// explicit point size as a template image.
 ///
-/// The image has a fixed size in points and is drawn on demand, so each display renders
-/// it at its own scale. A plain symbol image could be laid out by its pixel size when the
-/// menu bar moved to a display with a different scale (a TV at 1x), and grew there.
+/// The image keeps the symbol's own size in points but is drawn on demand, so each
+/// display renders it at its own scale. A plain symbol image could be laid out by its
+/// pixel size when the menu bar moved to a display with a different scale (a TV at 1x),
+/// and grew there.
 struct MenuBarIcon: View {
     let symbol: String
 
-    /// Menu bar extras are 22 pt tall; 18 pt leaves the usual margin.
-    static let side: CGFloat = 18
-
     var body: some View {
         Image(nsImage: Self.image(symbol))
-            .resizable()
-            .scaledToFit()
-            .frame(width: Self.side, height: Self.side)
     }
 
     static func image(_ symbol: String) -> NSImage {
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
         guard let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: "LeakLock")?
             .withSymbolConfiguration(config) else { return NSImage() }
-        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
-            let s = glyph.size
-            let scale = min(rect.width / s.width, rect.height / s.height, 1)
-            let w = s.width * scale, h = s.height * scale
-            glyph.draw(in: NSRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h))
+        let image = NSImage(size: glyph.size, flipped: false) { rect in
+            glyph.draw(in: rect)
             return true
         }
         image.isTemplate = true

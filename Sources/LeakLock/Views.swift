@@ -23,20 +23,38 @@ struct LeakLockApp: App {
 }
 
 /// Status-bar glyph. SwiftUI renders `Image(systemName:)` in the menu bar at the small
-/// text size, which looks undersized next to other icons, so the symbol is rasterized
-/// at an explicit point size as a template image.
+/// text size, which looks undersized next to other icons, so the symbol is drawn at an
+/// explicit size as a template image.
+///
+/// The image has a fixed size in points and is drawn on demand, so each display renders
+/// it at its own scale. A plain symbol image could be laid out by its pixel size when the
+/// menu bar moved to a display with a different scale (a TV at 1x), and grew there.
 struct MenuBarIcon: View {
     let symbol: String
 
+    /// Menu bar extras are 22 pt tall; 18 pt leaves the usual margin.
+    static let side: CGFloat = 18
+
     var body: some View {
         Image(nsImage: Self.image(symbol))
+            .resizable()
+            .scaledToFit()
+            .frame(width: Self.side, height: Self.side)
     }
 
     static func image(_ symbol: String) -> NSImage {
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "LeakLock")?
-            .withSymbolConfiguration(config) ?? NSImage()
+        guard let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: "LeakLock")?
+            .withSymbolConfiguration(config) else { return NSImage() }
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            let s = glyph.size
+            let scale = min(rect.width / s.width, rect.height / s.height, 1)
+            let w = s.width * scale, h = s.height * scale
+            glyph.draw(in: NSRect(x: rect.midX - w / 2, y: rect.midY - h / 2, width: w, height: h))
+            return true
+        }
         image.isTemplate = true
+        image.accessibilityDescription = "LeakLock"
         return image
     }
 }
@@ -104,6 +122,19 @@ struct MenuView: View {
 
             Divider()
 
+            sectionHeader("Для всех VPN")
+            Toggle("Локальная сеть без VPN", isOn: binding(\.allowLAN))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .padding(.bottom, 6)
+            Toggle("DNS без VPN", isOn: binding(\.allowDNS))
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .padding(.bottom, 10)
+
+            Divider()
+
+            sectionHeader("AmneziaVPN")
             VStack(alignment: .leading, spacing: 6) {
                 Text("Без VPN блокировать")
                     .font(.caption)
@@ -117,20 +148,16 @@ struct MenuView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                Text("«Адреса из VPN» блокирует только то, что Amnezia направляет в туннель, остальное идёт напрямую по её списку раздельного туннелирования.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.vertical, 10)
+            .padding(.bottom, 10)
 
             Divider()
 
-            Toggle("Локальная сеть без VPN", isOn: binding(\.allowLAN))
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
-            Toggle("DNS без VPN", isOn: binding(\.allowDNS))
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .padding(.bottom, 6)
+            sectionHeader("Incy")
             Toggle("Доверять маршрутизации Incy", isOn: binding(\.trustClientRouting))
                 .toggleStyle(.switch)
                 .controlSize(.small)
@@ -259,11 +286,21 @@ struct MenuView: View {
         .padding(.horizontal, 4)
     }
 
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
+    }
+
     private var trustClientRoutingNote: String {
         var note = "Пока Incy подключён и внешний IP проверен, сайты из списков Direct в Incy "
             + "открываются напрямую, а не блокируются. Включайте вместе с kill switch в Incy: "
             + "он не даёт другим программам обходить туннель. С другими VPN-клиентами настройка "
-            + "не действует."
+            + "не действует. Без VPN при Incy блокируется весь интернет: Incy направляет в "
+            + "туннель всё, поэтому выбор режима выше на него не влияет."
         if model.status?.clientRoutingTrusted == true { note += "\nСейчас действует." }
         return note
     }
@@ -396,7 +433,7 @@ struct SettingsView: View {
                     Button("Забыть выученные маршруты") { model.resetLearnedRoutes() }
                         .glassButtons()
                 } header: {
-                    Text("Адреса из VPN")
+                    Text("AmneziaVPN: адреса из VPN")
                 } footer: {
                     Text("LeakLock запоминает всё, что VPN когда-либо направлял в туннель, и сам этот список не сокращает. Если вы убрали сайты из списка VPN, а они всё равно блокируются, нажмите кнопку при подключённом VPN: список соберётся заново по текущим маршрутам.")
                         .foregroundStyle(.secondary)

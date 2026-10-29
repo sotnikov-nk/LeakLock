@@ -134,16 +134,16 @@ public enum VPNClient: String, Codable, CaseIterable {
     /// Bundle ID of Incy's Network Extension, as `scutil --nc list` shows it.
     public static let incyBundleID = "llc.itdev.incy"
 
-    /// Whether a connected service's bundle ID belongs to Happ (App Store build).
-    static func isHapp(_ bundleID: String) -> Bool {
-        bundleID.lowercased().contains("happ")
-    }
+    /// The same for Happ (App Store build). Happ also puts its direct IP ranges into
+    /// the system routing table via Wi-Fi, so those count as split tunneling already;
+    /// only its domain-based Direct rules need trust.
+    public static let happBundleID = "su.ffg.happ"
 
     /// The client behind the current tunnel, from `scutil --nc list`.
     public static func detect(_ scutilOutput: String) -> VPNClient {
         let connected = Parse.connectedVPNClients(scutilOutput)
         if connected.contains(incyBundleID) { return .incy }
-        if connected.contains(where: isHapp) { return .happ }
+        if connected.contains(happBundleID) { return .happ }
         return .amnezia
     }
 }

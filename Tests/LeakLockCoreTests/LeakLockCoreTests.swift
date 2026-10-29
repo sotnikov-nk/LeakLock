@@ -361,7 +361,7 @@ final class RoutesTests: XCTestCase {
             "* (Connected)  ID VPN (com.example.vpn) \"x [VPN:llc.itdev.incy]\"  [VPN:com.example.vpn]\n"), .amnezia)
         XCTAssertEqual(VPNClient.detect(""), .amnezia)
         XCTAssertEqual(VPNClient.detect(
-            "* (Connected)  ID VPN (com.happproxy.app) \"Happ\"  [VPN:com.happproxy.app]\n"), .happ)
+            "* (Connected)      7A77DC79-0000-0000-0000-000000000003 VPN (su.ffg.happ)  \"Happ\"  [VPN:su.ffg.happ]\n"), .happ)
         // Each client has its own switch; Amnezia never needs one.
         XCTAssertTrue(config.trustsRouting(of: .incy))
         XCTAssertFalse(config.trustsRouting(of: .happ))

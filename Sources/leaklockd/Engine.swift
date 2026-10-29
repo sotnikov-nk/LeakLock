@@ -29,6 +29,8 @@ final class Engine {
     private var verifiedTunnel: String?
     /// Incy is the connected VPN and the setting is on.
     private var trustedClientConnected = false
+    /// The connected Incy is Incy Desktop, whose direct traffic comes from root.
+    private var clientIsDesktop = false
     private var mismatchedTunnel: String?
     private var externalIP: String?
     private var lastCheck: Date?
@@ -111,7 +113,13 @@ final class Engine {
         if verifiedTunnel != current { verifiedTunnel = nil }
         if mismatchedTunnel != current { mismatchedTunnel = nil }
 
-        let client = current.map { _ in VPNClient.detect(Routing.vpnServices()) }
+        var client = current.map { _ in VPNClient.detect(Routing.vpnServices()) }
+        let desktop = client == .amnezia && VPNClient.incyDesktopRunning(Routing.processes())
+        if desktop { client = .incy }
+        if desktop != clientIsDesktop {
+            log("Incy Desktop \(desktop ? "running" : "gone")")
+            clientIsDesktop = desktop
+        }
         if let client, client != routesClient {
             log("VPN client: \(routesClient.rawValue) -> \(client.rawValue)")
             routesClient = client
@@ -212,8 +220,11 @@ final class Engine {
         var enforced = config
         enforced.trustClientRouting = trustedClientConnected
         enforced.trustHappRouting = false
-        let rules = PFRules.ruleset(mode: mode, config: enforced, protected: learned, onLinkV6: onLinkV6)
-        let policy = PFRules.ruleset(mode: .locked, config: enforced, protected: learned, onLinkV6: onLinkV6)
+        let trustedUser = clientIsDesktop ? "root" : nil
+        let rules = PFRules.ruleset(mode: mode, config: enforced, protected: learned, onLinkV6: onLinkV6,
+                                    trustedUser: trustedUser)
+        let policy = PFRules.ruleset(mode: .locked, config: enforced, protected: learned, onLinkV6: onLinkV6,
+                                     trustedUser: trustedUser)
         var mustLoad = rules != appliedRules || !initialized
         if healthDue {
             lastHealthCheck = now

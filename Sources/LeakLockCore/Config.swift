@@ -139,6 +139,17 @@ public enum VPNClient: String, Codable, CaseIterable {
     /// only its domain-based Direct rules need trust.
     public static let happBundleID = "su.ffg.happ"
 
+    /// Incy Desktop (the DMG from GitHub) is no system VPN, so `scutil` does not list
+    /// it. It runs Xray as root from its app bundle; `ps -axo user=,command=` shows it.
+    public static func incyDesktopRunning(_ psOutput: String) -> Bool {
+        psOutput.split(whereSeparator: \.isNewline).contains { line in
+            let fields = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard fields.count == 2, fields[0] == "root" else { return false }
+            let command = fields[1]
+            return command.contains("/INCY Desktop.app/") && command.contains("/xray run")
+        }
+    }
+
     /// The client behind the current tunnel, from `scutil --nc list`.
     public static func detect(_ scutilOutput: String) -> VPNClient {
         let connected = Parse.connectedVPNClients(scutilOutput)

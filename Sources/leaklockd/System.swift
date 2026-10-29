@@ -173,6 +173,11 @@ enum Routing {
         Shell.run("/usr/sbin/scutil", ["--nc", "list"], timeout: 5).stdout
     }
 
+    /// `ps -axo user=,command=`: owner and command line of every process.
+    static func processes() -> String {
+        Shell.run("/bin/ps", ["-axo", "user=,command="], timeout: 5).stdout
+    }
+
     static func onLinkV6() -> [String] {
         let r = Shell.run("/usr/sbin/netstat", ["-rn", "-f", "inet6"], timeout: 5)
         return r.ok ? Routes.onLinkIPv6Prefixes(r.stdout) : []

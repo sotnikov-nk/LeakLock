@@ -370,6 +370,21 @@ final class RoutesTests: XCTestCase {
         XCTAssertTrue(happ.trustsRouting(of: .happ))
         happ.trustHappRouting = false
         XCTAssertFalse(happ.trustsRouting(of: .incy))
+        // Incy Desktop: only its root-owned Xray may go direct, and the policy differs,
+        // so moving between the App Store and desktop builds flushes states.
+        let desktopOpen = PFRules.ruleset(mode: .open(tunnel: "utun4"), config: config, protected: table,
+                                          trustedUser: "root")
+        XCTAssertTrue(desktopOpen.contains("pass out quick proto { tcp, udp } from any to any user root keep state (if-bound)"))
+        XCTAssertFalse(desktopOpen.contains("pass out quick all keep"))
+        XCTAssertNotEqual(PFRules.ruleset(mode: .locked, config: config, protected: table, trustedUser: "root"),
+                          PFRules.ruleset(mode: .locked, config: config, protected: table))
+        let ps = """
+        sotnikov   3651 /Applications/INCY Desktop.app/Contents/MacOS/incy
+        root       /Applications/INCY Desktop.app/Contents/app/resources/bin/xray run -config /var/tmp/incy-xray/config.json
+        """
+        XCTAssertTrue(VPNClient.incyDesktopRunning(ps))
+        XCTAssertFalse(VPNClient.incyDesktopRunning(ps.replacingOccurrences(of: "root ", with: "user ")))
+        XCTAssertFalse(VPNClient.incyDesktopRunning("root /usr/local/bin/xray run -config x.json\n"))
         // Older config files load with the setting off.
         let old = try! JSONDecoder().decode(GuardConfig.self, from: Data(#"{"enabled":true}"#.utf8))
         XCTAssertFalse(old.trustClientRouting)

@@ -25,7 +25,11 @@ cp Resources/com.leaklock.daemon.plist Resources/install-helper.sh Resources/uni
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD_NUMBER/" Resources/Info.plist > "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-swift scripts/make-icon.swift "$OUT/AppIcon.iconset"
+mkdir -p "$OUT/AppIcon.iconset"
+for size in 16 32 128 256 512; do
+  sips -z $size $size Resources/AppIcon.png --out "$OUT/AppIcon.iconset/icon_${size}x${size}.png" >/dev/null
+  sips -z $((size * 2)) $((size * 2)) Resources/AppIcon.png --out "$OUT/AppIcon.iconset/icon_${size}x${size}@2x.png" >/dev/null
+done
 iconutil -c icns "$OUT/AppIcon.iconset" -o "$APP/Contents/Resources/AppIcon.icns"
 rm -rf "$OUT/AppIcon.iconset"
 

@@ -367,7 +367,7 @@ enum ExternalIP {
 
 enum ConfigStore {
     static func load() -> GuardConfig {
-        guard let data = FileManager.default.contents(atPath: Paths.configFile) else { return GuardConfig() }
+        guard let data = FileManager.default.contents(atPath: Paths.configFile) else { return GuardConfig.initial }
         do {
             return try JSONDecoder().decode(GuardConfig.self, from: data).sanitized()
         } catch {

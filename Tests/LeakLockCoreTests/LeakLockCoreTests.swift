@@ -385,10 +385,11 @@ final class RoutesTests: XCTestCase {
         XCTAssertTrue(VPNClient.incyDesktopRunning(ps))
         XCTAssertFalse(VPNClient.incyDesktopRunning(ps.replacingOccurrences(of: "root ", with: "user ")))
         XCTAssertFalse(VPNClient.incyDesktopRunning("root /usr/local/bin/xray run -config x.json\n"))
-        // Older config files load with the setting off.
+        // Older config files and fresh installs trust Incy and Happ.
         let old = try! JSONDecoder().decode(GuardConfig.self, from: Data(#"{"enabled":true}"#.utf8))
-        XCTAssertFalse(old.trustClientRouting)
-        XCTAssertFalse(old.trustHappRouting)
+        XCTAssertTrue(old.trustClientRouting)
+        XCTAssertTrue(old.trustHappRouting)
+        XCTAssertFalse(old.allowLAN)
     }
 
     func testLearnedRoutesAreKeptPerClient() {

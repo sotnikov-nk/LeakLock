@@ -64,10 +64,17 @@ public struct GuardConfig: Codable, Equatable {
         self.pfCheckIntervalSeconds = pfCheckIntervalSeconds
     }
 
+    /// Settings of a fresh install, also used for keys an older file lacks. Incy and
+    /// Happ are trusted from the start: their routing is set up in the client anyway,
+    /// and the trust only applies while their tunnel is up and verified.
+    public static var initial: GuardConfig {
+        GuardConfig(trustClientRouting: true, trustHappRouting: true)
+    }
+
     public init(from decoder: Decoder) throws {
         // Tolerate missing keys so older config files keep loading.
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let d = GuardConfig()
+        let d = GuardConfig.initial
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
         blockScope = try c.decodeIfPresent(BlockScope.self, forKey: .blockScope) ?? d.blockScope
         vpnServerIPs = try c.decodeIfPresent([String].self, forKey: .vpnServerIPs) ?? d.vpnServerIPs

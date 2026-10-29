@@ -374,7 +374,7 @@ final class RoutesTests: XCTestCase {
                                           trustClient: true, trustedUser: "root"),
                           PFRules.ruleset(mode: .locked, config: config, protected: table, trustClient: true))
         let ps = """
-        sotnikov   3651 /Applications/INCY Desktop.app/Contents/MacOS/incy
+        alice      3651 /Applications/INCY Desktop.app/Contents/MacOS/incy
         root       /Applications/INCY Desktop.app/Contents/app/resources/bin/xray run -config /var/tmp/incy-xray/config.json
         """
         XCTAssertTrue(VPNClient.incyDesktopRunning(ps))

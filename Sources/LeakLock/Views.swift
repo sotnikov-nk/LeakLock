@@ -143,13 +143,9 @@ struct MenuView: View {
 
             Divider()
 
-            trustSection(.incy, isOn: binding(\.trustClientRouting),
-                         killSwitch: "kill switch в Incy")
-
-            Divider()
-
-            trustSection(.happ, isOn: binding(\.trustHappRouting),
-                         killSwitch: "«Включить все сети» в Happ")
+            sectionHeader("Incy и Happ")
+            note("Сайты из прямых правил клиента открываются напрямую, пока VPN подключён. Включите kill switch в клиенте (в Happ: «Включить все сети»).")
+                .padding(.bottom, 10)
         }
         .padding(.horizontal, 14)
         .glassCard()
@@ -345,20 +341,6 @@ struct MenuView: View {
             .padding(.bottom, 6)
     }
 
-    /// Incy and Happ split traffic inside the client, so each gets its own trust switch.
-    @ViewBuilder
-    private func trustSection(_ client: VPNClient, isOn: Binding<Bool>, killSwitch: String) -> some View {
-        sectionHeader(client.title)
-        settingRow(Help.trust(client.title, killSwitch: killSwitch), isOn: isOn) {
-            Text("Доверять маршрутизации \(client.title)")
-        }
-        let active = model.status?.clientRoutingTrusted == true && model.status?.routesClient == client
-        note("Пока \(client.title) подключён, сайты из его списков Direct открываются напрямую. "
-            + "Включайте вместе с \(killSwitch)." + (active ? " Сейчас действует." : ""))
-            .padding(.top, 4)
-            .padding(.bottom, 10)
-    }
-
     private func binding(_ keyPath: WritableKeyPath<GuardConfig, Bool>) -> Binding<Bool> {
         Binding(
             get: { model.status?.config[keyPath: keyPath] ?? false },
@@ -419,18 +401,6 @@ enum Help {
         из исключений раздельного туннелирования открываются напрямую. Breaker запоминает \
         адреса туннеля и держит их закрытыми, пока VPN выключен.
         """
-    static func trust(_ client: String, killSwitch: String) -> String {
-        """
-        \(client) сам решает, какие сайты пустить мимо VPN: это прямые (Direct) правила \
-        в профиле маршрутизации, например RoscomVPN. Для macOS такой трафик неотличим \
-        от утечки, и без этой настройки Breaker его блокирует.
-
-        Настройка действует, только пока \(client) подключён и внешний IP проверен. При обрыве \
-        или несовпадении IP всё снова закрыто. С другими клиентами она не работает.
-
-        Включайте её вместе с \(killSwitch): тогда остальные программы не выйдут мимо туннеля.
-        """
-    }
 }
 
 /// Large status header: tinted glass badge with the shield and the current state.

@@ -66,7 +66,7 @@ public enum PFRules {
     ///   `Routes.onLinkIPv6Prefixes`), allowed together with the LAN.
     public static func ruleset(
         mode: FilterMode, config: GuardConfig, protected: ProtectedTable? = nil, onLinkV6: [String] = [],
-        trustedUser: String? = nil
+        trustClient: Bool = false, trustedUser: String? = nil
     ) -> String {
         // With `trustedUser`, only that user's sockets may leave outside the tunnel:
         // Incy Desktop runs its Xray core as root, so the direct connections it makes
@@ -86,7 +86,7 @@ public enum PFRules {
         let local = " no state"
 
         var lines: [String] = ["# LeakLock \(LeakLockVersion.current): generated, do not edit"]
-        if config.trustClientRouting {
+        if trustClient {
             // Also in the `.locked` rendering, which the daemon compares to decide on a
             // state flush: switching the setting off must end the direct connections.
             lines.append("# client routing trusted while verified" + trustScope)
@@ -143,7 +143,7 @@ public enum PFRules {
         case .open(let tunnel):
             if isTunnelInterface(tunnel) {
                 lines.append("pass out quick on \(tunnel) all" + states)
-                if config.trustClientRouting {
+                if trustClient {
                     // The client's direct connections. Tunnel loss or a failed check
                     // drops back to `.locked`/`.verifying`, which flushes these states.
                     // `user` only matches TCP and UDP sockets, so name them.

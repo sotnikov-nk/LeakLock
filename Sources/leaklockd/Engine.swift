@@ -27,7 +27,7 @@ final class Engine {
     private var lastForcedCheck = Date.distantPast
     private let learnSettleSeconds: TimeInterval = 5
     private var verifiedTunnel: String?
-    /// Incy is the connected VPN and the setting is on.
+    /// Incy or Happ is the connected VPN, so its own routing is trusted.
     private var trustedClientConnected = false
     /// The connected Incy is Incy Desktop, whose direct traffic comes from root.
     private var clientIsDesktop = false
@@ -134,7 +134,7 @@ final class Engine {
             candidate = nil
         }
 
-        let trusted = config.enabled && client.map(config.trustsRouting) == true
+        let trusted = config.enabled && client?.routesOwnTraffic == true
         if trusted != trustedClientConnected {
             log("client routing \(trusted ? "trusted" : "not trusted")")
             trustedClientConnected = trusted
@@ -215,16 +215,12 @@ final class Engine {
         }
 
         let onLinkV6 = config.allowLAN ? Routing.onLinkV6() : []
-        // The setting only counts while a trusted client is connected; its change also
-        // changes `policy`, so connections are flushed when trust ends.
-        var enforced = config
-        enforced.trustClientRouting = trustedClientConnected
-        enforced.trustHappRouting = false
+        // Trust also changes `policy`, so connections are flushed when it ends.
         let trustedUser = clientIsDesktop ? "root" : nil
-        let rules = PFRules.ruleset(mode: mode, config: enforced, protected: learned, onLinkV6: onLinkV6,
-                                    trustedUser: trustedUser)
-        let policy = PFRules.ruleset(mode: .locked, config: enforced, protected: learned, onLinkV6: onLinkV6,
-                                     trustedUser: trustedUser)
+        let rules = PFRules.ruleset(mode: mode, config: config, protected: learned, onLinkV6: onLinkV6,
+                                    trustClient: trustedClientConnected, trustedUser: trustedUser)
+        let policy = PFRules.ruleset(mode: .locked, config: config, protected: learned, onLinkV6: onLinkV6,
+                                     trustClient: trustedClientConnected, trustedUser: trustedUser)
         var mustLoad = rules != appliedRules || !initialized
         if healthDue {
             lastHealthCheck = now

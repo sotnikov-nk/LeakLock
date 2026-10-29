@@ -179,6 +179,9 @@ final class AppModel: ObservableObject {
         if status.message != status.state.title(scope: status.config.blockScope) { lines.append(status.message) }
         lines.append("Туннель VPN: \(status.routeInterface ?? "не найден")")
         if let count = status.protectedCount { lines.append("Маршрутов VPN под защитой: \(count)") }
+        if status.clientRoutingTrusted == true, let client = status.routesClient {
+            lines.append("Прямые правила \(client.title) действуют")
+        }
         if let ip = status.externalIP, status.state != .disabled { lines.append("Внешний IP: \(ip)") }
         if let date = status.lastCheck {
             lines.append("Проверено: \(date.formatted(date: .omitted, time: .standard))")

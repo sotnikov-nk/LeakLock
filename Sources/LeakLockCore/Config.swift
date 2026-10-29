@@ -24,17 +24,6 @@ public struct GuardConfig: Codable, Equatable {
     /// Allow DNS (port 53) to any resolver while the VPN is down. Needed only when the
     /// VPN client resolves the server by host name.
     public var allowDNS: Bool
-    /// While the tunnel is verified and Incy (`VPNClient.incy`) is the connected VPN,
-    /// let traffic leave outside the tunnel too. In the ruleset's input (the daemon's
-    /// enforced copy) it means "trust is in effect now", for whichever client. For clients that split traffic inside
-    /// the tunnel process (Incy's Direct rules: the client itself sends those
-    /// connections via Wi-Fi), which pf cannot tell apart from a leak. Safe only together
-    /// with the client's own kill switch, which keeps other apps in the tunnel while it
-    /// is up; with any other client, or once the tunnel drops or is unverified, this has
-    /// no effect.
-    public var trustClientRouting: Bool
-    /// The same for Happ (`VPNClient.happ`).
-    public var trustHappRouting: Bool
     /// How often the external IP is re-checked while the tunnel is open, in seconds.
     public var recheckIntervalSeconds: Int
     /// How often the daemon verifies that pf is on and its rules are intact, in
@@ -48,8 +37,6 @@ public struct GuardConfig: Codable, Equatable {
         vpnServerIPs: [String] = [],
         allowLAN: Bool = false,
         allowDNS: Bool = false,
-        trustClientRouting: Bool = false,
-        trustHappRouting: Bool = false,
         recheckIntervalSeconds: Int = 60,
         pfCheckIntervalSeconds: Int = 1
     ) {
@@ -58,45 +45,23 @@ public struct GuardConfig: Codable, Equatable {
         self.vpnServerIPs = vpnServerIPs
         self.allowLAN = allowLAN
         self.allowDNS = allowDNS
-        self.trustClientRouting = trustClientRouting
-        self.trustHappRouting = trustHappRouting
         self.recheckIntervalSeconds = recheckIntervalSeconds
         self.pfCheckIntervalSeconds = pfCheckIntervalSeconds
-    }
-
-    /// Settings of a fresh install, also used for keys an older file lacks. Incy and
-    /// Happ are trusted from the start: their routing is set up in the client anyway,
-    /// and the trust only applies while their tunnel is up and verified.
-    public static var initial: GuardConfig {
-        GuardConfig(trustClientRouting: true, trustHappRouting: true)
     }
 
     public init(from decoder: Decoder) throws {
         // Tolerate missing keys so older config files keep loading.
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        let d = GuardConfig.initial
+        let d = GuardConfig()
         enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? d.enabled
         blockScope = try c.decodeIfPresent(BlockScope.self, forKey: .blockScope) ?? d.blockScope
         vpnServerIPs = try c.decodeIfPresent([String].self, forKey: .vpnServerIPs) ?? d.vpnServerIPs
         allowLAN = try c.decodeIfPresent(Bool.self, forKey: .allowLAN) ?? d.allowLAN
         allowDNS = try c.decodeIfPresent(Bool.self, forKey: .allowDNS) ?? d.allowDNS
-        trustClientRouting = try c.decodeIfPresent(Bool.self, forKey: .trustClientRouting) ?? d.trustClientRouting
-        trustHappRouting = try c.decodeIfPresent(Bool.self, forKey: .trustHappRouting) ?? d.trustHappRouting
         recheckIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .recheckIntervalSeconds)
             ?? d.recheckIntervalSeconds
         pfCheckIntervalSeconds = try c.decodeIfPresent(Int.self, forKey: .pfCheckIntervalSeconds)
             ?? d.pfCheckIntervalSeconds
-    }
-
-    /// Whether the user lets `client` route traffic past the tunnel itself. Amnezia
-    /// splits traffic with system routes, which Breaker already follows, so it never
-    /// needs this.
-    public func trustsRouting(of client: VPNClient) -> Bool {
-        switch client {
-        case .amnezia: return false
-        case .incy: return trustClientRouting
-        case .happ: return trustHappRouting
-        }
     }
 
     /// Server IPs that parse as IPv4/IPv6, normalized and de-duplicated.
@@ -129,6 +94,14 @@ public enum VPNClient: String, Codable, CaseIterable {
     case amnezia
     case incy
     case happ
+
+    /// Incy and Happ split traffic inside the client: their Direct rules are sent
+    /// by the client itself via Wi-Fi, which pf cannot tell apart from a leak. While
+    /// such a client is connected and verified, traffic outside the tunnel is allowed
+    /// (see `PFRules.ruleset(trustClient:)`); the client's own kill switch keeps other
+    /// apps in the tunnel. Amnezia splits traffic with system routes, which Breaker
+    /// already follows.
+    public var routesOwnTraffic: Bool { self != .amnezia }
 
     public var title: String {
         switch self {

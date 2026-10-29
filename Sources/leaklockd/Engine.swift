@@ -14,7 +14,11 @@ final class Engine {
     /// Destinations the VPN routes into the tunnel; persisted so they stay blocked
     /// after the VPN goes down. Never narrows on its own (see `ProtectedTable.merged`);
     /// the user shrinks it with `resetLearnedRoutes`.
-    private var learned = LearnedRoutesStore.load()
+    private var learned: ProtectedTable
+    /// Every client's table; `learned` is the one of `routesClient`.
+    private var store: LearnedRoutes
+    /// The connected client, or the last one while no tunnel is up.
+    private var routesClient: VPNClient
     /// A table seen while the tunnel is up. New tunnel destinations are protected at
     /// once; its exemptions are adopted only once it has stayed the same for
     /// `learnSettleSeconds` on a verified tunnel, so a half-built table caught while
@@ -23,6 +27,10 @@ final class Engine {
     private var lastForcedCheck = Date.distantPast
     private let learnSettleSeconds: TimeInterval = 5
     private var verifiedTunnel: String?
+    /// Incy or Happ is the connected VPN, so its own routing is trusted.
+    private var trustedClientConnected = false
+    /// The connected Incy is Incy Desktop, whose direct traffic comes from root.
+    private var clientIsDesktop = false
     private var mismatchedTunnel: String?
     private var externalIP: String?
     private var lastCheck: Date?
@@ -59,6 +67,10 @@ final class Engine {
 
     init(config: GuardConfig) {
         self.config = config
+        let loaded = LearnedRoutesStore.load()
+        store = loaded
+        routesClient = loaded.lastClient
+        learned = loaded[loaded.lastClient]
         publishStatus()
     }
 
@@ -91,15 +103,41 @@ final class Engine {
         if current != tunnel {
             log("VPN tunnel: \(tunnel ?? "none") -> \(current ?? "none")")
             tunnel = current
+            // The schedule belonged to the old tunnel: after a verified check it is a
+            // whole recheck interval away, and a VPN that came back would stay blocked
+            // until then. Check the new tunnel at once.
+            nextCheckAt = .distantPast
+            consecutiveFailures = 0
         }
         // Verification belongs to one interface; a new or vanished tunnel starts over.
         if verifiedTunnel != current { verifiedTunnel = nil }
         if mismatchedTunnel != current { mismatchedTunnel = nil }
 
+        var client = current.map { _ in VPNClient.detect(Routing.vpnServices()) }
+        let desktop = client == .amnezia && VPNClient.incyDesktopRunning(Routing.processes())
+        if desktop { client = .incy }
+        if desktop != clientIsDesktop {
+            log("Incy Desktop \(desktop ? "running" : "gone")")
+            clientIsDesktop = desktop
+        }
+        if let client, client != routesClient {
+            log("VPN client: \(routesClient.rawValue) -> \(client.rawValue)")
+            routesClient = client
+            learned = store[client]
+            candidate = nil
+            saveLearned()
+        }
+
         if let current {
             learn(Routes.protectedTable(routes, tunnel: current), tunnel: current)
         } else {
             candidate = nil
+        }
+
+        let trusted = config.enabled && client?.routesOwnTraffic == true
+        if trusted != trustedClientConnected {
+            log("client routing \(trusted ? "trusted" : "not trusted")")
+            trustedClientConnected = trusted
         }
 
         let decision = Decision.decide(
@@ -128,7 +166,7 @@ final class Engine {
         let grown = learned.merged(with: ProtectedTable(included: table.included, excluded: learned.excluded))
         if grown != learned, mismatchedTunnel != tunnel {
             learned = grown
-            LearnedRoutesStore.save(grown)
+            saveLearned()
             log("now protecting \(grown.included.count) tunnel routes")
         }
         let merged = learned.merged(with: table)
@@ -144,8 +182,14 @@ final class Engine {
         guard verifiedTunnel == tunnel, now.timeIntervalSince(c.since) >= learnSettleSeconds else { return }
         learned = merged
         candidate = nil
-        LearnedRoutesStore.save(merged)
+        saveLearned()
         log("learned \(merged.included.count) tunnel routes, \(merged.excluded.count) exclusions")
+    }
+
+    private func saveLearned() {
+        store[routesClient] = learned
+        store.lastClient = routesClient
+        LearnedRoutesStore.save(store)
     }
 
     private func apply(_ mode: FilterMode?) {
@@ -171,8 +215,12 @@ final class Engine {
         }
 
         let onLinkV6 = config.allowLAN ? Routing.onLinkV6() : []
-        let rules = PFRules.ruleset(mode: mode, config: config, protected: learned, onLinkV6: onLinkV6)
-        let policy = PFRules.ruleset(mode: .locked, config: config, protected: learned, onLinkV6: onLinkV6)
+        // Trust also changes `policy`, so connections are flushed when it ends.
+        let trustedUser = clientIsDesktop ? "root" : nil
+        let rules = PFRules.ruleset(mode: mode, config: config, protected: learned, onLinkV6: onLinkV6,
+                                    trustClient: trustedClientConnected, trustedUser: trustedUser)
+        let policy = PFRules.ruleset(mode: .locked, config: config, protected: learned, onLinkV6: onLinkV6,
+                                     trustClient: trustedClientConnected, trustedUser: trustedUser)
         var mustLoad = rules != appliedRules || !initialized
         if healthDue {
             lastHealthCheck = now
@@ -202,7 +250,7 @@ final class Engine {
                 if now.timeIntervalSince(lastTamperReload) < 5 {
                     // Changed again right after a reload: something keeps rewriting pf.
                     // Keep reloading, but do not cut every connection each second.
-                    problem = problem ?? "правила LeakLock в pf постоянно меняет другая программа"
+                    problem = problem ?? "правила Breaker в pf постоянно меняет другая программа"
                 } else {
                     // Anything may have connected while the rules were off: start over.
                     appliedMode = nil
@@ -249,7 +297,8 @@ final class Engine {
 
     private func startCheck(tunnel: String) {
         checkInFlight = true
-        ExternalIP.fetch(tunnel: tunnel) { [weak self] result in
+        let config = self.config
+        ExternalIP.fetch(tunnel: tunnel, accept: { Decision.ipMatches($0, config: config) }) { [weak self] result in
             guard let self else { return }
             self.queue.async { self.finishCheck(tunnel: tunnel, result: result) }
         }
@@ -326,8 +375,8 @@ final class Engine {
                 }
                 learned = ProtectedTable()
                 candidate = nil
-                LearnedRoutesStore.save(learned)
-                log("learned routes reset")
+                saveLearned()
+                log("learned routes of \(routesClient.rawValue) reset")
                 queue.async { self.tick() }
                 return IPCResponse(ok: true, status: publishStatus())
             case .setConfig:
@@ -335,7 +384,7 @@ final class Engine {
                     return IPCResponse(ok: false, error: "Менять настройки может только администратор Mac.")
                 }
                 guard let newConfig = request.config?.sanitized() else {
-                    return IPCResponse(ok: false, error: "Нет настроек в запросе.")
+                    return IPCResponse(ok: false, error: "В запросе нет настроек.")
                 }
                 do {
                     try ConfigStore.save(newConfig)
@@ -389,7 +438,9 @@ final class Engine {
             externalIP: externalIP,
             lastCheck: lastCheck,
             message: message,
-            protectedCount: config.blockScope == .vpnRoutes && !learned.isEmpty ? learned.included.count : nil
+            protectedCount: config.blockScope == .vpnRoutes && !learned.isEmpty ? learned.included.count : nil,
+            clientRoutingTrusted: trustedClientConnected && state == .protected,
+            routesClient: routesClient
         )
     }
 }

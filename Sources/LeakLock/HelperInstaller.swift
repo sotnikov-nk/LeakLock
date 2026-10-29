@@ -13,7 +13,7 @@ enum HelperInstaller {
         var errorDescription: String? {
             switch self {
             case .cancelled: return "Установка отменена."
-            case .missingResources: return "В приложении не найдены файлы службы. Переустановите LeakLock."
+            case .missingResources: return "В приложении нет файлов службы. Переустановите Breaker."
             case .script(let detail): return detail
             }
         }
@@ -38,10 +38,10 @@ enum HelperInstaller {
         guard FileManager.default.fileExists(atPath: scriptPath) else { throw Failure.missingResources }
 
         let source = """
-        do shell script "/bin/sh " & quoted form of "\(escape(scriptPath))" & " " & quoted form of "\(escape(resources))" with prompt "LeakLock устанавливает службу, которая управляет файрволом." with administrator privileges
+        do shell script "/bin/sh " & quoted form of "\(escape(scriptPath))" & " " & quoted form of "\(escape(resources))" with prompt "Breaker устанавливает службу, которая управляет файрволом." with administrator privileges
         """
         var errorInfo: NSDictionary?
-        guard let appleScript = NSAppleScript(source: source) else { throw Failure.script("AppleScript не создан") }
+        guard let appleScript = NSAppleScript(source: source) else { throw Failure.script("Не удалось создать AppleScript.") }
         _ = appleScript.executeAndReturnError(&errorInfo)
         if let errorInfo {
             if (errorInfo[NSAppleScript.errorNumber] as? Int) == -128 { throw Failure.cancelled }

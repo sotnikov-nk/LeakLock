@@ -23,10 +23,14 @@ public enum PFRules {
     /// bound to the tunnel interface (IP_BOUND_IF), so a check can only ever leave
     /// through the tunnel being verified: never through Wi-Fi, whatever the routing
     /// table says. Plain HTTP is enough: the request travels inside the tunnel.
+    ///
+    /// Services that popular routing profiles send direct come last: RoscomVPN (Incy)
+    /// routes ipify, checkip.amazonaws.com and ifconfig.me outside the VPN on purpose.
     public static let ipCheckEndpoints: [IPCheckEndpoint] = [
+        IPCheckEndpoint(host: "icanhazip.com", path: "/"),
+        IPCheckEndpoint(host: "ident.me", path: "/"),
         IPCheckEndpoint(host: "api.ipify.org", path: "/"),
         IPCheckEndpoint(host: "checkip.amazonaws.com", path: "/"),
-        IPCheckEndpoint(host: "icanhazip.com", path: "/"),
         IPCheckEndpoint(host: "ifconfig.me", path: "/ip"),
     ]
 
@@ -61,8 +65,13 @@ public enum PFRules {
     /// - Parameter onLinkV6: the home network's own IPv6 prefixes (see
     ///   `Routes.onLinkIPv6Prefixes`), allowed together with the LAN.
     public static func ruleset(
-        mode: FilterMode, config: GuardConfig, protected: ProtectedTable? = nil, onLinkV6: [String] = []
+        mode: FilterMode, config: GuardConfig, protected: ProtectedTable? = nil, onLinkV6: [String] = [],
+        trustClient: Bool = false, trustedUser: String? = nil
     ) -> String {
+        // With `trustedUser`, only that user's sockets may leave outside the tunnel:
+        // Incy Desktop runs its Xray core as root, so the direct connections it makes
+        // pass while apps of the logged-in user stay in the tunnel.
+        let trustScope = trustedUser.map { " user \($0)" } ?? ""
         // Tunnel connections' states are bound to the tunnel interface, so packets of a
         // connection opened through the VPN can never leave through Wi-Fi after the
         // tunnel drops (pf states float across interfaces by default).
@@ -77,6 +86,11 @@ public enum PFRules {
         let local = " no state"
 
         var lines: [String] = ["# LeakLock \(LeakLockVersion.current): generated, do not edit"]
+        if trustClient {
+            // Also in the `.locked` rendering, which the daemon compares to decide on a
+            // state flush: switching the setting off must end the direct connections.
+            lines.append("# client routing trusted while verified" + trustScope)
+        }
         if scopedToRoutes, let protected {
             lines.append("table <\(anchorTable)> { \(protected.pfEntries.joined(separator: ", ")) }")
         }
@@ -129,6 +143,14 @@ public enum PFRules {
         case .open(let tunnel):
             if isTunnelInterface(tunnel) {
                 lines.append("pass out quick on \(tunnel) all" + states)
+                if trustClient {
+                    // The client's direct connections. Tunnel loss or a failed check
+                    // drops back to `.locked`/`.verifying`, which flushes these states.
+                    // `user` only matches TCP and UDP sockets, so name them.
+                    lines.append(trustedUser == nil
+                        ? "pass out quick all" + states
+                        : "pass out quick proto { tcp, udp } from any to any" + trustScope + states)
+                }
             }
         }
 

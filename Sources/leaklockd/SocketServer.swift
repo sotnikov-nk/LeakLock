@@ -83,7 +83,7 @@ final class SocketServer {
             let request = try IPCCoding.decoder().decode(IPCRequest.self, from: line)
             response = handler(request, isAdmin(uid))
         } catch {
-            response = IPCResponse(ok: false, error: "Некорректный запрос: \(error)")
+            response = IPCResponse(ok: false, error: "Непонятный запрос: \(error)")
         }
         guard var data = try? IPCCoding.encoder().encode(response) else { return }
         data.append(0x0A)

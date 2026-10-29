@@ -298,6 +298,110 @@ final class RoutesTests: XCTestCase {
         XCTAssertNil(Routes.vpnTunnel(Routes.parse("default 192.168.1.1 UGScg en0\n")))
     }
 
+    // Incy from the App Store (Network Extension packet tunnel, Xray) with "global
+    // proxy" on: a plain default route into the tunnel instead of 0/1 + 128/1, a
+    // 198.18/16 interface address and many cloned host routes. The server's own
+    // connection is excluded by the system, so it has no route of its own.
+    private let incyNetstat = """
+    Destination        Gateway            Flags               Netif Expire
+    default            link#26            UCSg                utun4
+    default            192.168.1.1        UGScIg                en0
+    17.248.150.3       link#26            UHW3Ig              utun4     26
+    149.154.167.41     link#26            UHWIig              utun4
+    192.168.1          link#15            UCS                   en0      !
+    198.18.0.1         198.18.0.1         UH                  utun4
+    198.18.0.2         link#26            UHWIig              utun4
+    224.0.0/4          link#26            UmCSI               utun4
+    240.0.0.17         link#26            UHWIig              utun4
+    255.255.255.255/32 link#26            UCSI                utun4
+    """
+
+    func testIncyNetworkExtensionTunnel() {
+        let entries = Routes.parse(incyNetstat)
+        XCTAssertEqual(Routes.vpnTunnel(entries), "utun4")
+        let table = Routes.protectedTable(entries, tunnel: "utun4")
+        XCTAssertEqual(table.included.map(\.description), ["0.0.0.0/0", "198.18.0.1/32"])
+        XCTAssertEqual(table.excluded.map(\.description), ["192.168.1.0/24"])
+        let config = GuardConfig(enabled: true, blockScope: .vpnRoutes, vpnServerIPs: ["198.51.100.170"])
+        let rules = PFRules.ruleset(mode: .open(tunnel: "utun4"), config: config, protected: table)
+        XCTAssertTrue(rules.contains("pass out quick inet from any to { 198.51.100.170 }"))
+        XCTAssertTrue(rules.contains("pass out quick on utun4 all"))
+        XCTAssertTrue(rules.contains("block return out quick inet from any to <leaklock_vpn>"))
+    }
+
+    func testTrustedClientRoutingOpensOnlyWhileVerified() {
+        let table = Routes.protectedTable(Routes.parse(incyNetstat), tunnel: "utun4")
+        let config = GuardConfig(enabled: true, blockScope: .vpnRoutes, vpnServerIPs: ["198.51.100.170"])
+        let open = PFRules.ruleset(mode: .open(tunnel: "utun4"), config: config, protected: table, trustClient: true)
+        XCTAssertTrue(open.contains("pass out quick all keep state (if-bound)"))
+        let lines = open.split(separator: "\n").map(String.init)
+        XCTAssertLessThan(lines.firstIndex(of: "pass out quick all keep state (if-bound)")!,
+                          lines.firstIndex { $0.hasPrefix("block") }!)
+        for mode in [FilterMode.locked, .verifying(tunnel: "utun4")] {
+            XCTAssertFalse(PFRules.ruleset(mode: mode, config: config, protected: table, trustClient: true)
+                .contains("pass out quick all keep"))
+        }
+        // Trust ending changes the policy, so the daemon flushes direct states.
+        XCTAssertNotEqual(PFRules.ruleset(mode: .locked, config: config, protected: table, trustClient: true),
+                          PFRules.ruleset(mode: .locked, config: config, protected: table))
+        XCTAssertFalse(PFRules.ruleset(mode: .open(tunnel: "utun4"), config: config, protected: table)
+            .contains("pass out quick all keep"))
+        // Trust needs Incy itself to be the connected VPN.
+        let scutil = """
+        Available network connection services in the current set (*=enabled):
+        * (Disconnected)   CF01C6CF-0000-0000-0000-000000000001 VPN (org.outline.macos.client) "Outline"    [VPN:org.outline.macos.client]
+        * (Connected)      AAA04198-0000-0000-0000-000000000002 VPN (llc.itdev.incy) "incy"                  [VPN:llc.itdev.incy]
+        """
+        XCTAssertEqual(Parse.connectedVPNClients(scutil), ["llc.itdev.incy"])
+        XCTAssertEqual(VPNClient.detect(scutil), .incy)
+        XCTAssertEqual(VPNClient.detect(scutil.replacingOccurrences(of: "(Connected)", with: "(Disconnected)")), .amnezia)
+        XCTAssertEqual(VPNClient.detect(
+            "* (Connected)  ID VPN (com.example.vpn) \"x [VPN:llc.itdev.incy]\"  [VPN:com.example.vpn]\n"), .amnezia)
+        XCTAssertEqual(VPNClient.detect(""), .amnezia)
+        XCTAssertEqual(VPNClient.detect(
+            "* (Connected)      7A77DC79-0000-0000-0000-000000000003 VPN (su.ffg.happ)  \"Happ\"  [VPN:su.ffg.happ]\n"), .happ)
+        // Incy and Happ route traffic themselves; Amnezia uses system routes.
+        XCTAssertTrue(VPNClient.incy.routesOwnTraffic)
+        XCTAssertTrue(VPNClient.happ.routesOwnTraffic)
+        XCTAssertFalse(VPNClient.amnezia.routesOwnTraffic)
+        // Incy Desktop: only its root-owned Xray may go direct, and the policy differs,
+        // so moving between the App Store and desktop builds flushes states.
+        let desktopOpen = PFRules.ruleset(mode: .open(tunnel: "utun4"), config: config, protected: table,
+                                          trustClient: true, trustedUser: "root")
+        XCTAssertTrue(desktopOpen.contains("pass out quick proto { tcp, udp } from any to any user root keep state (if-bound)"))
+        XCTAssertFalse(desktopOpen.contains("pass out quick all keep"))
+        XCTAssertNotEqual(PFRules.ruleset(mode: .locked, config: config, protected: table,
+                                          trustClient: true, trustedUser: "root"),
+                          PFRules.ruleset(mode: .locked, config: config, protected: table, trustClient: true))
+        let ps = """
+        alice      3651 /Applications/INCY Desktop.app/Contents/MacOS/incy
+        root       /Applications/INCY Desktop.app/Contents/app/resources/bin/xray run -config /var/tmp/incy-xray/config.json
+        """
+        XCTAssertTrue(VPNClient.incyDesktopRunning(ps))
+        XCTAssertFalse(VPNClient.incyDesktopRunning(ps.replacingOccurrences(of: "root ", with: "user ")))
+        XCTAssertFalse(VPNClient.incyDesktopRunning("root /usr/local/bin/xray run -config x.json\n"))
+        // Config files of the test builds, with the removed switch, still load.
+        let old = try! JSONDecoder().decode(GuardConfig.self, from: Data(#"{"enabled":true,"trustClientRouting":false}"#.utf8))
+        XCTAssertTrue(old.enabled)
+    }
+
+    func testLearnedRoutesAreKeptPerClient() {
+        let n = { (s: String) in IPv4Network(s)! }
+        let amnezia = ProtectedTable(included: [n("0.0.0.0/1"), n("128.0.0.0/1")], excluded: [n("203.0.113.0/24")])
+        // A 0.4.4 file holds Amnezia's routes.
+        var routes = LearnedRoutes(legacy: amnezia)
+        XCTAssertEqual(routes.lastClient, .amnezia)
+        XCTAssertEqual(routes[.amnezia], amnezia)
+        XCTAssertTrue(routes[.incy].isEmpty)
+        // Incy's whole-internet table does not leak into Amnezia's.
+        routes[.incy] = ProtectedTable(included: [n("0.0.0.0/0")])
+        routes.lastClient = .incy
+        XCTAssertEqual(routes[.amnezia], amnezia)
+        let decoded = try! JSONDecoder().decode(LearnedRoutes.self, from: try! JSONEncoder().encode(routes))
+        XCTAssertEqual(decoded, routes)
+        XCTAssertTrue(LearnedRoutes(legacy: ProtectedTable()).tables.isEmpty)
+    }
+
     func testMergedTableNeverNarrowsOnItsOwn() {
         let n = { (s: String) in IPv4Network(s)! }
         let full = ProtectedTable(included: [n("0.0.0.0/1"), n("128.0.0.0/1")], excluded: [n("198.51.100.170/32")])

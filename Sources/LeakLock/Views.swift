@@ -15,7 +15,7 @@ struct LeakLockApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Настройки LeakLock", id: "settings") {
+        Window("Настройки Breaker", id: "settings") {
             SettingsView().environmentObject(model).environmentObject(updater)
         }
         .windowResizability(.contentSize)
@@ -23,8 +23,13 @@ struct LeakLockApp: App {
 }
 
 /// Status-bar glyph. SwiftUI renders `Image(systemName:)` in the menu bar at the small
-/// text size, which looks undersized next to other icons, so the symbol is rasterized
-/// at an explicit point size as a template image.
+/// text size, which looks undersized next to other icons, so the symbol is drawn at an
+/// explicit point size as a template image.
+///
+/// The image keeps the symbol's own size in points but is drawn on demand, so each
+/// display renders it at its own scale. A plain symbol image could be laid out by its
+/// pixel size when the menu bar moved to a display with a different scale (a TV at 1x),
+/// and grew there.
 struct MenuBarIcon: View {
     let symbol: String
 
@@ -34,9 +39,14 @@ struct MenuBarIcon: View {
 
     static func image(_ symbol: String) -> NSImage {
         let config = NSImage.SymbolConfiguration(pointSize: 16, weight: .medium)
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "LeakLock")?
-            .withSymbolConfiguration(config) ?? NSImage()
+        guard let glyph = NSImage(systemSymbolName: symbol, accessibilityDescription: "Breaker")?
+            .withSymbolConfiguration(config) else { return NSImage() }
+        let image = NSImage(size: glyph.size, flipped: false) { rect in
+            glyph.draw(in: rect)
+            return true
+        }
         image.isTemplate = true
+        image.accessibilityDescription = "Breaker"
         return image
     }
 }
@@ -47,6 +57,7 @@ struct MenuView: View {
     @EnvironmentObject private var model: AppModel
     @EnvironmentObject private var updater: Updater
     @Environment(\.openWindow) private var openWindow
+    @State private var ipWarningPulse = false
 
     var body: some View {
         GlassGroup {
@@ -57,14 +68,14 @@ struct MenuView: View {
 
                 if !model.helperInstalled {
                     installPrompt(
-                        text: "Чтобы блокировать интернет без VPN, нужна служба с правами администратора. Пароль спросят один раз.",
+                        text: "Чтобы блокировать интернет без VPN, нужна служба с правами администратора. Пароль понадобится один раз.",
                         button: "Установить службу…"
                     )
                 } else if let status = model.status, model.daemonReachable {
                     controls(status)
                 } else {
                     installPrompt(
-                        text: "Служба установлена, но не отвечает. Попробуйте переустановить её.",
+                        text: "Служба не отвечает. Переустановите её.",
                         button: "Переустановить службу…"
                     )
                 }
@@ -85,29 +96,36 @@ struct MenuView: View {
 
     @ViewBuilder
     private func controls(_ status: GuardStatus) -> some View {
+        if status.config.validServerIPs.isEmpty {
+            serverIPWarning
+        }
+
         VStack(spacing: 0) {
-            Toggle(isOn: binding(\.enabled)) {
+            settingRow(Help.protection, isOn: protectionBinding(status)) {
                 Label("Защита", systemImage: "lock.shield")
                     .font(.body.weight(.semibold))
             }
-            .toggleStyle(.switch)
-            .disabled(!status.config.enabled && status.config.validServerIPs.isEmpty)
+            .controlSize(.regular)
             .padding(.vertical, 10)
-
-            if status.config.validServerIPs.isEmpty {
-                Text("Сначала укажите IP VPN-сервера в настройках.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.bottom, 8)
-            }
 
             Divider()
 
+            sectionHeader("Для всех VPN")
+            settingRow(Help.lan, isOn: binding(\.allowLAN)) { Text("Локальная сеть без VPN") }
+                .padding(.bottom, 6)
+            settingRow(Help.dns, isOn: binding(\.allowDNS)) { Text("DNS без VPN") }
+                .padding(.bottom, 10)
+
+            Divider()
+
+            sectionHeader("AmneziaVPN")
             VStack(alignment: .leading, spacing: 6) {
-                Text("Без VPN блокировать")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 4) {
+                    Text("Без VPN блокировать")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    HelpButton(text: Help.amneziaScope)
+                }
                 Picker("Без VPN блокировать", selection: Binding(
                     get: { status.config.blockScope },
                     set: { value in model.updateConfig { $0.blockScope = value } }
@@ -117,19 +135,16 @@ struct MenuView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                note(status.config.blockScope == .vpnRoutes
+                    ? "Закрыто только то, что Amnezia ведёт через туннель. Сайты из исключений открываются напрямую."
+                    : "Закрыт весь интернет, кроме сервера VPN.")
             }
-            .padding(.vertical, 10)
+            .padding(.bottom, 10)
 
             Divider()
 
-            Toggle("Локальная сеть без VPN", isOn: binding(\.allowLAN))
-                .toggleStyle(.switch)
-                .controlSize(.small)
-                .padding(.top, 10)
-                .padding(.bottom, 6)
-            Toggle("DNS без VPN", isOn: binding(\.allowDNS))
-                .toggleStyle(.switch)
-                .controlSize(.small)
+            sectionHeader("Incy и Happ")
+            note("Сайты из прямых правил клиента открываются напрямую, пока VPN подключён. Включите kill switch в клиенте (в Happ: «Включить все сети»).")
                 .padding(.bottom, 10)
         }
         .padding(.horizontal, 14)
@@ -157,6 +172,74 @@ struct MenuView: View {
         .glassButtons()
     }
 
+    /// Without a server address protection cannot turn on, so say so up front
+    /// instead of leaving a greyed-out switch.
+    private var serverIPWarning: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("Укажите IP VPN-сервера", systemImage: "exclamationmark.triangle.fill")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.orange)
+            Text("Без него защита не включится: Breaker сверяет с ним внешний IP.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Button {
+                openSettings()
+            } label: {
+                Text("Указать IP…").frame(maxWidth: .infinity)
+            }
+            .glassButtons(prominent: true)
+        }
+        .padding(14)
+        .glassCard()
+        .scaleEffect(ipWarningPulse ? 1.04 : 1)
+        .animation(.spring(response: 0.25, dampingFraction: 0.4), value: ipWarningPulse)
+    }
+
+    /// Switching protection on without a server address points at the warning and
+    /// opens the settings, rather than doing nothing.
+    private func protectionBinding(_ status: GuardStatus) -> Binding<Bool> {
+        Binding(
+            get: { status.config.enabled },
+            set: { value in
+                if value && status.config.validServerIPs.isEmpty {
+                    ipWarningPulse = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { ipWarningPulse = false }
+                    openSettings()
+                    return
+                }
+                model.updateConfig { $0.enabled = value }
+            }
+        )
+    }
+
+    private func openSettings() {
+        openWindow(id: "settings")
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func settingRow<Title: View>(
+        _ help: String, isOn: Binding<Bool>, @ViewBuilder title: () -> Title
+    ) -> some View {
+        HStack(spacing: 4) {
+            title()
+            HelpButton(text: help)
+            Spacer(minLength: 8)
+            Toggle("", isOn: isOn)
+                .labelsHidden()
+                .toggleStyle(.switch)
+        }
+        .controlSize(.small)
+    }
+
+    private func note(_ text: String) -> some View {
+        Text(text)
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
     @ViewBuilder
     private var updateBanner: some View {
         switch updater.phase {
@@ -173,7 +256,7 @@ struct MenuView: View {
         case .installing(let release):
             HStack(spacing: 10) {
                 ProgressView().controlSize(.small)
-                Text("Устанавливаю \(release.version), приложение перезапустится…")
+                Text("Устанавливаю \(release.version). Приложение перезапустится…")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 0)
@@ -215,8 +298,7 @@ struct MenuView: View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Button {
-                    openWindow(id: "settings")
-                    NSApp.activate(ignoringOtherApps: true)
+                    openSettings()
                 } label: {
                     Label("Настройки", systemImage: "gearshape")
                 }
@@ -243,11 +325,20 @@ struct MenuView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Защита продолжает работать и после выхода из приложения.")
+            Text("Защита работает и после выхода из приложения.")
                 .font(.caption2)
                 .foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 4)
+    }
+
+    private func sectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, 10)
+            .padding(.bottom, 6)
     }
 
     private func binding(_ keyPath: WritableKeyPath<GuardConfig, Bool>) -> Binding<Bool> {
@@ -256,6 +347,60 @@ struct MenuView: View {
             set: { value in model.updateConfig { $0[keyPath: keyPath] = value } }
         )
     }
+}
+
+/// "?" next to a setting; opens the full explanation in a popover.
+struct HelpButton: View {
+    let text: String
+    @State private var shown = false
+
+    var body: some View {
+        Button {
+            shown.toggle()
+        } label: {
+            Image(systemName: "questionmark.circle")
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+        .controlSize(.small)
+        .accessibilityLabel("Подробнее")
+        .popover(isPresented: $shown, arrowEdge: .bottom) {
+            Text(text)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 280, alignment: .leading)
+                .padding(14)
+        }
+    }
+}
+
+/// Full explanations behind the "?" buttons.
+enum Help {
+    static let protection = """
+        Breaker пропускает трафик, только когда VPN подключён и внешний IP совпадает \
+        с адресом сервера. В остальное время трафик блокирует файрвол macOS.
+
+        Защита работает и после выхода из приложения.
+        """
+    static let lan = """
+        Принтер, сетевые диски и роутер будут доступны и без VPN. Интернет при этом \
+        остаётся закрытым.
+
+        AirDrop, AirPlay и повтор экрана iPhone работают при любом значении.
+        """
+    static let dns = """
+        Нужен, только если в VPN-клиенте сервер указан доменом, а не IP: иначе клиент \
+        не узнает адрес сервера.
+
+        Без VPN DNS-запросы пойдут мимо туннеля, и провайдер увидит, какие сайты вы открываете.
+        """
+    static let amneziaScope = """
+        «Весь интернет»: без VPN закрыто всё, кроме сервера VPN. Подходит для чужих сетей.
+
+        «Адреса из VPN»: закрыто только то, что Amnezia ведёт через туннель. Сайты \
+        из исключений раздельного туннелирования открываются напрямую. Breaker запоминает \
+        адреса туннеля и держит их закрытыми, пока VPN выключен.
+        """
 }
 
 /// Large status header: tinted glass badge with the shield and the current state.
@@ -301,7 +446,7 @@ struct SettingsView: View {
             Section {
                 if let config = model.status?.config {
                     if config.vpnServerIPs.isEmpty {
-                        Text("Пока не указано ни одного адреса.").foregroundStyle(.secondary)
+                        Text("Адресов пока нет. Без них защита не включится.").foregroundStyle(.orange)
                     }
                     ForEach(config.vpnServerIPs, id: \.self) { ip in
                         HStack {
@@ -330,7 +475,7 @@ struct SettingsView: View {
                             model.updateConfig { $0.vpnServerIPs.append(ip) }
                         }
                         .glassButtons()
-                        Text("Нажимайте, только если VPN сейчас точно подключён.")
+                        Text("Нажимайте, только если VPN точно подключён.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 } else {
@@ -339,7 +484,7 @@ struct SettingsView: View {
             } header: {
                 Text("IP-адреса VPN-сервера")
             } footer: {
-                Text("Трафик к этим адресам разрешён всегда, чтобы VPN мог подключиться. Интернет открывается, только когда внешний IP совпадает с одним из них.")
+                Text("К этим адресам трафик разрешён всегда, чтобы VPN мог подключиться. Интернет откроется, когда внешний IP совпадёт с одним из них.")
                     .foregroundStyle(.secondary)
             }
 
@@ -367,26 +512,27 @@ struct SettingsView: View {
                 } header: {
                     Text("Проверка правил pf")
                 } footer: {
-                    Text("Как часто служба проверяет, что pf включён и правила LeakLock не изменила другая программа. Обрыв VPN блокируется мгновенно при любом значении. Больший интервал чуть экономит батарею, но вмешательство в pf будет замечено позже.")
+                    Text("Как часто служба проверяет, что pf включён и правила Breaker никто не менял. Обрыв VPN блокируется сразу при любом значении. Редкая проверка чуть бережёт батарею, но чужое вмешательство в pf будет заметно позже.")
                         .foregroundStyle(.secondary)
                 }
             }
 
             if let status = model.status, status.config.blockScope == .vpnRoutes {
                 Section {
-                    LabeledContent("Маршрутов VPN под защитой", value: status.protectedCount.map { "\($0)" } ?? "пока нет")
+                    LabeledContent("Клиент", value: (status.routesClient ?? .amnezia).title)
+                    LabeledContent("Маршрутов под защитой", value: status.protectedCount.map { "\($0)" } ?? "пока нет")
                     Button("Забыть выученные маршруты") { model.resetLearnedRoutes() }
                         .glassButtons()
                 } header: {
                     Text("Адреса из VPN")
                 } footer: {
-                    Text("LeakLock запоминает всё, что VPN когда-либо направлял в туннель, и сам этот список не сокращает. Если вы убрали сайты из списка VPN, а они всё равно блокируются, нажмите кнопку при подключённом VPN: список соберётся заново по текущим маршрутам.")
+                    Text("У каждого клиента свой список, и он только пополняется. Если сайты, которые вы убрали из списка VPN, всё ещё блокируются, подключите VPN и нажмите кнопку.")
                         .foregroundStyle(.secondary)
                 }
             }
 
             Section("Служба и запуск") {
-                Toggle("Запускать LeakLock при входе", isOn: Binding(
+                Toggle("Запускать Breaker при входе", isOn: Binding(
                     get: { model.launchAtLogin },
                     set: { model.launchAtLogin = $0 }
                 ))
@@ -401,7 +547,7 @@ struct SettingsView: View {
                 }
                 .glassButtons()
                 .disabled(model.busy)
-                Text("После удаления службы блокировка снимается полностью.")
+                Text("Если удалить службу, блокировка снимется полностью.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 

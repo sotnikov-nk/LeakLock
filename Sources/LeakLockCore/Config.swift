@@ -86,6 +86,82 @@ public struct GuardConfig: Codable, Equatable {
     }
 }
 
+/// The VPN client a tunnel belongs to. Learned routes are kept per client: Incy routes
+/// the whole internet into its tunnel, which must not turn Amnezia's split tunneling
+/// into "block everything" once Incy has been used.
+public enum VPNClient: String, Codable, CaseIterable {
+    /// AmneziaVPN, and any other client that is not recognized.
+    case amnezia
+    case incy
+    case happ
+
+    /// Incy and Happ split traffic inside the client: their Direct rules are sent
+    /// by the client itself via Wi-Fi, which pf cannot tell apart from a leak. While
+    /// such a client is connected and verified, traffic outside the tunnel is allowed
+    /// (see `PFRules.ruleset(trustClient:)`); the client's own kill switch keeps other
+    /// apps in the tunnel. Amnezia splits traffic with system routes, which Breaker
+    /// already follows.
+    public var routesOwnTraffic: Bool { self != .amnezia }
+
+    public var title: String {
+        switch self {
+        case .amnezia: return "AmneziaVPN"
+        case .incy: return "Incy"
+        case .happ: return "Happ"
+        }
+    }
+
+    /// Bundle ID of Incy's Network Extension, as `scutil --nc list` shows it.
+    public static let incyBundleID = "llc.itdev.incy"
+
+    /// The same for Happ (App Store build). Happ also puts its direct IP ranges into
+    /// the system routing table via Wi-Fi, so those count as split tunneling already;
+    /// only its domain-based Direct rules need trust.
+    public static let happBundleID = "su.ffg.happ"
+
+    /// Incy Desktop (the DMG from GitHub) is no system VPN, so `scutil` does not list
+    /// it. It runs Xray as root from its app bundle; `ps -axo user=,command=` shows it.
+    public static func incyDesktopRunning(_ psOutput: String) -> Bool {
+        psOutput.split(whereSeparator: \.isNewline).contains { line in
+            let fields = line.split(separator: " ", maxSplits: 1, omittingEmptySubsequences: true)
+            guard fields.count == 2, fields[0] == "root" else { return false }
+            let command = fields[1]
+            return command.contains("/INCY Desktop.app/") && command.contains("/xray run")
+        }
+    }
+
+    /// The client behind the current tunnel, from `scutil --nc list`.
+    public static func detect(_ scutilOutput: String) -> VPNClient {
+        let connected = Parse.connectedVPNClients(scutilOutput)
+        if connected.contains(incyBundleID) { return .incy }
+        if connected.contains(happBundleID) { return .happ }
+        return .amnezia
+    }
+}
+
+/// Learned tunnel routes of every client, and which client was connected last: without
+/// a VPN, its table is the one enforced.
+public struct LearnedRoutes: Codable, Equatable {
+    /// Keyed by `VPNClient.rawValue`; unknown keys from newer versions are kept.
+    public var tables: [String: ProtectedTable]
+    public var lastClient: VPNClient
+
+    public init(tables: [String: ProtectedTable] = [:], lastClient: VPNClient = .amnezia) {
+        self.tables = tables
+        self.lastClient = lastClient
+    }
+
+    /// A single-table file from 0.4.4 and earlier, which only knew Amnezia.
+    public init(legacy: ProtectedTable) {
+        self.init(tables: legacy.isEmpty ? [:] : [VPNClient.amnezia.rawValue: legacy])
+    }
+
+    public subscript(client: VPNClient) -> ProtectedTable {
+        get { tables[client.rawValue] ?? ProtectedTable() }
+        set { tables[client.rawValue] = newValue }
+    }
+}
+
 public enum Paths {
     public static let daemonLabel = "com.leaklock.daemon"
     public static let socketPath = "/var/run/com.leaklock.daemon.sock"
@@ -94,6 +170,9 @@ public enum Paths {
     /// Last known set of tunnel destinations, kept so they stay blocked after the VPN
     /// (and its routes) disappear.
     public static let learnedRoutesFile = configDirectory + "/learned-routes.json"
+    /// The same per VPN client (`LearnedRoutes`), since 0.4.5. The old file is migrated
+    /// into Amnezia's table on first start.
+    public static let learnedRoutesByClientFile = configDirectory + "/learned-routes-by-client.json"
     public static let helperPath = "/Library/PrivilegedHelperTools/com.leaklock.daemon"
     public static let launchDaemonPlist = "/Library/LaunchDaemons/com.leaklock.daemon.plist"
     /// Sub-anchor of Apple's `com.apple/*`, which the stock /etc/pf.conf already

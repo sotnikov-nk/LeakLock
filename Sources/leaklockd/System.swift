@@ -146,11 +146,11 @@ final class PF {
 
     private func mainRulesetProblem() -> String? {
         if !Parse.mainRulesetHasAppleAnchor(Shell.run(pfctl, ["-s", "rules"]).stdout) {
-            return "main pf ruleset lost the com.apple/* anchor"
+            return "в основных правилах pf пропал якорь com.apple/*"
         }
         let skipped = Parse.skippedInterfaces(Shell.run(pfctl, ["-s", "Interfaces", "-v"]).stdout)
         if !skipped.isEmpty {
-            return "pf skips filtering on \(skipped.joined(separator: ", "))"
+            return "pf не фильтрует \(skipped.joined(separator: ", "))"
         }
         return nil
     }
@@ -168,6 +168,16 @@ enum Routing {
         return r.ok ? Routes.parse(r.stdout) : []
     }
 
+    /// `scutil --nc list`: the system's VPN services and their state.
+    static func vpnServices() -> String {
+        Shell.run("/usr/sbin/scutil", ["--nc", "list"], timeout: 5).stdout
+    }
+
+    /// `ps -axo user=,command=`: owner and command line of every process.
+    static func processes() -> String {
+        Shell.run("/bin/ps", ["-axo", "user=,command="], timeout: 5).stdout
+    }
+
     static func onLinkV6() -> [String] {
         let r = Shell.run("/usr/sbin/netstat", ["-rn", "-f", "inet6"], timeout: 5)
         return r.ok ? Routes.onLinkIPv6Prefixes(r.stdout) : []
@@ -175,19 +185,23 @@ enum Routing {
 }
 
 enum LearnedRoutesStore {
-    static func load() -> ProtectedTable {
+    static func load() -> LearnedRoutes {
+        if let data = FileManager.default.contents(atPath: Paths.learnedRoutesByClientFile),
+           let routes = try? JSONDecoder().decode(LearnedRoutes.self, from: data) {
+            return routes
+        }
         guard let data = FileManager.default.contents(atPath: Paths.learnedRoutesFile),
-              let table = try? JSONDecoder().decode(ProtectedTable.self, from: data) else { return ProtectedTable() }
-        return table
+              let table = try? JSONDecoder().decode(ProtectedTable.self, from: data) else { return LearnedRoutes() }
+        return LearnedRoutes(legacy: table)
     }
 
-    static func save(_ table: ProtectedTable) {
+    static func save(_ routes: LearnedRoutes) {
         do {
             try FileManager.default.createDirectory(
                 atPath: Paths.configDirectory, withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o755]
             )
-            try JSONEncoder().encode(table).write(to: URL(fileURLWithPath: Paths.learnedRoutesFile), options: .atomic)
+            try JSONEncoder().encode(routes).write(to: URL(fileURLWithPath: Paths.learnedRoutesByClientFile), options: .atomic)
         } catch {
             log("cannot save learned routes: \(error)")
         }
@@ -228,10 +242,16 @@ enum ExternalIP {
     private static let ipBoundIF: Int32 = 25
     private static let timeoutSeconds = 5
 
-    /// Asks IP-echo services which address `tunnel` exits from; first answer wins.
-    /// Every request goes through a socket bound to `tunnel`, so it cannot leave
-    /// through any other interface: if the tunnel is gone, the check simply fails.
-    static func fetch(tunnel: String, completion: @escaping (Result<IPAddress, Failure>) -> Void) {
+    /// Asks IP-echo services which address `tunnel` exits from. Every request goes
+    /// through a socket bound to `tunnel`, so it cannot leave through any other
+    /// interface: if the tunnel is gone, the check simply fails.
+    ///
+    /// The first answer that `accept`s wins; without one, the first answer is returned.
+    /// A client that routes inside the tunnel (Incy with the RoscomVPN profile) may send
+    /// some echo services direct on purpose, so one answer with the home IP does not
+    /// mean the tunnel leads elsewhere while another service sees the VPN server.
+    static func fetch(tunnel: String, accept: @escaping (IPAddress) -> Bool,
+                      completion: @escaping (Result<IPAddress, Failure>) -> Void) {
         DispatchQueue.global(qos: .utility).async {
             let index = if_nametoindex(tunnel)
             guard index != 0 else {
@@ -239,16 +259,24 @@ enum ExternalIP {
                 return
             }
             var errors: [String] = []
+            var firstAnswer: IPAddress?
             for endpoint in PFRules.ipCheckEndpoints {
                 switch ask(endpoint, interfaceIndex: index) {
                 case .success(let ip):
-                    completion(.success(ip))
-                    return
+                    if accept(ip) {
+                        completion(.success(ip))
+                        return
+                    }
+                    firstAnswer = firstAnswer ?? ip
                 case .failure(let reason):
                     errors.append("\(endpoint.host): \(reason)")
                 }
             }
-            completion(.failure(.noAnswer(errors.joined(separator: "; "))))
+            if let firstAnswer {
+                completion(.success(firstAnswer))
+            } else {
+                completion(.failure(.noAnswer(errors.joined(separator: "; "))))
+            }
         }
     }
 
@@ -268,15 +296,15 @@ enum ExternalIP {
         }
         defer { freeaddrinfo(first) }
 
-        var lastError = "no address"
+        var lastError = "адрес не найден"
         var node: UnsafeMutablePointer<addrinfo>? = first
         while let ai = node {
             node = ai.pointee.ai_next
             switch request(endpoint, address: ai.pointee, interfaceIndex: interfaceIndex) {
             case .success(let raw):
-                guard let response = Parse.httpResponse(raw) else { lastError = "bad HTTP response"; continue }
+                guard let response = Parse.httpResponse(raw) else { lastError = "непонятный ответ HTTP"; continue }
                 guard response.status == 200 else { lastError = "HTTP \(response.status)"; continue }
-                guard let ip = Parse.echoedIP(response.body) else { lastError = "no IP in answer"; continue }
+                guard let ip = Parse.echoedIP(response.body) else { lastError = "в ответе нет IP"; continue }
                 return .success(ip)
             case .failure(let reason):
                 lastError = reason.description

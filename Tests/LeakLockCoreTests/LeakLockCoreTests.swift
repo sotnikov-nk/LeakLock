@@ -360,9 +360,20 @@ final class RoutesTests: XCTestCase {
         XCTAssertEqual(VPNClient.detect(
             "* (Connected)  ID VPN (com.example.vpn) \"x [VPN:llc.itdev.incy]\"  [VPN:com.example.vpn]\n"), .amnezia)
         XCTAssertEqual(VPNClient.detect(""), .amnezia)
+        XCTAssertEqual(VPNClient.detect(
+            "* (Connected)  ID VPN (com.happproxy.app) \"Happ\"  [VPN:com.happproxy.app]\n"), .happ)
+        // Each client has its own switch; Amnezia never needs one.
+        XCTAssertTrue(config.trustsRouting(of: .incy))
+        XCTAssertFalse(config.trustsRouting(of: .happ))
+        XCTAssertFalse(config.trustsRouting(of: .amnezia))
+        var happ = GuardConfig(trustHappRouting: true)
+        XCTAssertTrue(happ.trustsRouting(of: .happ))
+        happ.trustHappRouting = false
+        XCTAssertFalse(happ.trustsRouting(of: .incy))
         // Older config files load with the setting off.
         let old = try! JSONDecoder().decode(GuardConfig.self, from: Data(#"{"enabled":true}"#.utf8))
         XCTAssertFalse(old.trustClientRouting)
+        XCTAssertFalse(old.trustHappRouting)
     }
 
     func testLearnedRoutesAreKeptPerClient() {

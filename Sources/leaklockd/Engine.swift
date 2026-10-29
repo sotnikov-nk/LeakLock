@@ -121,7 +121,7 @@ final class Engine {
             candidate = nil
         }
 
-        let trusted = config.enabled && config.trustClientRouting && client == .incy
+        let trusted = config.enabled && client.map(config.trustsRouting) == true
         if trusted != trustedClientConnected {
             log("client routing \(trusted ? "trusted" : "not trusted")")
             trustedClientConnected = trusted
@@ -206,6 +206,7 @@ final class Engine {
         // changes `policy`, so connections are flushed when trust ends.
         var enforced = config
         enforced.trustClientRouting = trustedClientConnected
+        enforced.trustHappRouting = false
         let rules = PFRules.ruleset(mode: mode, config: enforced, protected: learned, onLinkV6: onLinkV6)
         let policy = PFRules.ruleset(mode: .locked, config: enforced, protected: learned, onLinkV6: onLinkV6)
         var mustLoad = rules != appliedRules || !initialized

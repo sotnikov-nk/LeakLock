@@ -143,11 +143,13 @@ struct MenuView: View {
 
             Divider()
 
-            sectionHeader("Incy")
-            settingRow(Help.incyTrust, isOn: binding(\.trustClientRouting)) { Text("Доверять маршрутизации Incy") }
-            note(trustClientRoutingNote)
-                .padding(.top, 4)
-                .padding(.bottom, 10)
+            trustSection(.incy, isOn: binding(\.trustClientRouting),
+                         killSwitch: "kill switch в Incy")
+
+            Divider()
+
+            trustSection(.happ, isOn: binding(\.trustHappRouting),
+                         killSwitch: "«Включить все сети» в Happ")
         }
         .padding(.horizontal, 14)
         .glassCard()
@@ -343,9 +345,18 @@ struct MenuView: View {
             .padding(.bottom, 6)
     }
 
-    private var trustClientRoutingNote: String {
-        let note = "Пока Incy подключён, сайты из его списков Direct открываются напрямую. Включайте вместе с kill switch в Incy."
-        return model.status?.clientRoutingTrusted == true ? note + " Сейчас действует." : note
+    /// Incy and Happ split traffic inside the client, so each gets its own trust switch.
+    @ViewBuilder
+    private func trustSection(_ client: VPNClient, isOn: Binding<Bool>, killSwitch: String) -> some View {
+        sectionHeader(client.title)
+        settingRow(Help.trust(client.title, killSwitch: killSwitch), isOn: isOn) {
+            Text("Доверять маршрутизации \(client.title)")
+        }
+        let active = model.status?.clientRoutingTrusted == true && model.status?.routesClient == client
+        note("Пока \(client.title) подключён, сайты из его списков Direct открываются напрямую. "
+            + "Включайте вместе с \(killSwitch)." + (active ? " Сейчас действует." : ""))
+            .padding(.top, 4)
+            .padding(.bottom, 10)
     }
 
     private func binding(_ keyPath: WritableKeyPath<GuardConfig, Bool>) -> Binding<Bool> {
@@ -408,16 +419,18 @@ enum Help {
         из исключений раздельного туннелирования открываются напрямую. Breaker запоминает \
         адреса туннеля и держит их закрытыми, пока VPN выключен.
         """
-    static let incyTrust = """
-        Incy сам решает, какие сайты пустить мимо VPN: это списки Direct в профиле \
-        маршрутизации, например RoscomVPN. Для macOS такой трафик неотличим от утечки, \
-        и без этой настройки Breaker его блокирует.
+    static func trust(_ client: String, killSwitch: String) -> String {
+        """
+        \(client) сам решает, какие сайты пустить мимо VPN: это прямые (Direct) правила \
+        в профиле маршрутизации, например RoscomVPN. Для macOS такой трафик неотличим \
+        от утечки, и без этой настройки Breaker его блокирует.
 
-        Настройка действует, только пока Incy подключён и внешний IP проверен. При обрыве \
+        Настройка действует, только пока \(client) подключён и внешний IP проверен. При обрыве \
         или несовпадении IP всё снова закрыто. С другими клиентами она не работает.
 
-        Включайте её вместе с kill switch в Incy: тогда остальные программы не выйдут мимо туннеля.
+        Включайте её вместе с \(killSwitch): тогда остальные программы не выйдут мимо туннеля.
         """
+    }
 }
 
 /// Large status header: tinted glass badge with the shield and the current state.

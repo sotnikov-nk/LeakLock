@@ -178,7 +178,7 @@ public extension GuardState {
         case .verifying: return "Проверяю внешний IP…"
         case .ipMismatch: return "Внешний IP не совпадает, \(blocked)"
         case .protected: return "VPN работает, трафик разрешён"
-        case .error: return "Ошибка pf"
+        case .error: return "Ошибка файрвола pf"
         }
     }
 }

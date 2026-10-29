@@ -85,7 +85,7 @@ final class Updater: ObservableObject {
         request.setValue("LeakLock/\(LeakLockVersion.current)", forHTTPHeaderField: "User-Agent")
         let (data, response) = try await URLSession.shared.data(for: request)
         let code = (response as? HTTPURLResponse)?.statusCode ?? 0
-        if code == 404 { throw Failure("релизы на GitHub не найдены (репозиторий закрыт или релизов нет)") }
+        if code == 404 { throw Failure("на GitHub нет релизов") }
         guard code == 200 else { throw Failure("GitHub ответил кодом \(code)") }
         guard let release = Updates.parseLatestRelease(data) else { throw Failure("в последнем релизе нет DMG") }
         return release
@@ -125,7 +125,7 @@ final class Updater: ObservableObject {
         let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))
         guard info?["CFBundleIdentifier"] as? String == identifier,
               info?["CFBundleShortVersionString"] as? String == version
-        else { throw Failure("в DMG не то приложение или не та версия") }
+        else { throw Failure("в DMG другое приложение или другая версия") }
         try run("/usr/bin/codesign", ["--verify", "--strict", app.path])
         return app
     }

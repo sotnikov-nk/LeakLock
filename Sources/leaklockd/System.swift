@@ -146,11 +146,11 @@ final class PF {
 
     private func mainRulesetProblem() -> String? {
         if !Parse.mainRulesetHasAppleAnchor(Shell.run(pfctl, ["-s", "rules"]).stdout) {
-            return "main pf ruleset lost the com.apple/* anchor"
+            return "в основных правилах pf пропал якорь com.apple/*"
         }
         let skipped = Parse.skippedInterfaces(Shell.run(pfctl, ["-s", "Interfaces", "-v"]).stdout)
         if !skipped.isEmpty {
-            return "pf skips filtering on \(skipped.joined(separator: ", "))"
+            return "pf не фильтрует \(skipped.joined(separator: ", "))"
         }
         return nil
     }
@@ -291,15 +291,15 @@ enum ExternalIP {
         }
         defer { freeaddrinfo(first) }
 
-        var lastError = "no address"
+        var lastError = "адрес не найден"
         var node: UnsafeMutablePointer<addrinfo>? = first
         while let ai = node {
             node = ai.pointee.ai_next
             switch request(endpoint, address: ai.pointee, interfaceIndex: interfaceIndex) {
             case .success(let raw):
-                guard let response = Parse.httpResponse(raw) else { lastError = "bad HTTP response"; continue }
+                guard let response = Parse.httpResponse(raw) else { lastError = "непонятный ответ HTTP"; continue }
                 guard response.status == 200 else { lastError = "HTTP \(response.status)"; continue }
-                guard let ip = Parse.echoedIP(response.body) else { lastError = "no IP in answer"; continue }
+                guard let ip = Parse.echoedIP(response.body) else { lastError = "в ответе нет IP"; continue }
                 return .success(ip)
             case .failure(let reason):
                 lastError = reason.description

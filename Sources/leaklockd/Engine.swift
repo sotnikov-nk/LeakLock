@@ -237,7 +237,7 @@ final class Engine {
                 if now.timeIntervalSince(lastTamperReload) < 5 {
                     // Changed again right after a reload: something keeps rewriting pf.
                     // Keep reloading, but do not cut every connection each second.
-                    problem = problem ?? "правила LeakLock в pf постоянно меняет другая программа"
+                    problem = problem ?? "правила Breaker в pf постоянно меняет другая программа"
                 } else {
                     // Anything may have connected while the rules were off: start over.
                     appliedMode = nil
@@ -371,7 +371,7 @@ final class Engine {
                     return IPCResponse(ok: false, error: "Менять настройки может только администратор Mac.")
                 }
                 guard let newConfig = request.config?.sanitized() else {
-                    return IPCResponse(ok: false, error: "Нет настроек в запросе.")
+                    return IPCResponse(ok: false, error: "В запросе нет настроек.")
                 }
                 do {
                     try ConfigStore.save(newConfig)

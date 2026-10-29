@@ -14,7 +14,11 @@ final class Engine {
     /// Destinations the VPN routes into the tunnel; persisted so they stay blocked
     /// after the VPN goes down. Never narrows on its own (see `ProtectedTable.merged`);
     /// the user shrinks it with `resetLearnedRoutes`.
-    private var learned = LearnedRoutesStore.load()
+    private var learned: ProtectedTable
+    /// Every client's table; `learned` is the one of `routesClient`.
+    private var store: LearnedRoutes
+    /// The connected client, or the last one while no tunnel is up.
+    private var routesClient: VPNClient
     /// A table seen while the tunnel is up. New tunnel destinations are protected at
     /// once; its exemptions are adopted only once it has stayed the same for
     /// `learnSettleSeconds` on a verified tunnel, so a half-built table caught while
@@ -23,8 +27,7 @@ final class Engine {
     private var lastForcedCheck = Date.distantPast
     private let learnSettleSeconds: TimeInterval = 5
     private var verifiedTunnel: String?
-    /// A client listed in `ClientTrust` is the connected VPN; checked only while the
-    /// setting is on and a tunnel is up.
+    /// Incy is the connected VPN and the setting is on.
     private var trustedClientConnected = false
     private var mismatchedTunnel: String?
     private var externalIP: String?
@@ -62,6 +65,10 @@ final class Engine {
 
     init(config: GuardConfig) {
         self.config = config
+        let loaded = LearnedRoutesStore.load()
+        store = loaded
+        routesClient = loaded.lastClient
+        learned = loaded[loaded.lastClient]
         publishStatus()
     }
 
@@ -99,14 +106,22 @@ final class Engine {
         if verifiedTunnel != current { verifiedTunnel = nil }
         if mismatchedTunnel != current { mismatchedTunnel = nil }
 
+        let client = current.map { _ in VPNClient.detect(Routing.vpnServices()) }
+        if let client, client != routesClient {
+            log("VPN client: \(routesClient.rawValue) -> \(client.rawValue)")
+            routesClient = client
+            learned = store[client]
+            candidate = nil
+            saveLearned()
+        }
+
         if let current {
             learn(Routes.protectedTable(routes, tunnel: current), tunnel: current)
         } else {
             candidate = nil
         }
 
-        let trusted = config.enabled && config.trustClientRouting && current != nil
-            && ClientTrust.isTrustedClientConnected(Routing.vpnServices())
+        let trusted = config.enabled && config.trustClientRouting && client == .incy
         if trusted != trustedClientConnected {
             log("client routing \(trusted ? "trusted" : "not trusted")")
             trustedClientConnected = trusted
@@ -138,7 +153,7 @@ final class Engine {
         let grown = learned.merged(with: ProtectedTable(included: table.included, excluded: learned.excluded))
         if grown != learned, mismatchedTunnel != tunnel {
             learned = grown
-            LearnedRoutesStore.save(grown)
+            saveLearned()
             log("now protecting \(grown.included.count) tunnel routes")
         }
         let merged = learned.merged(with: table)
@@ -154,8 +169,14 @@ final class Engine {
         guard verifiedTunnel == tunnel, now.timeIntervalSince(c.since) >= learnSettleSeconds else { return }
         learned = merged
         candidate = nil
-        LearnedRoutesStore.save(merged)
+        saveLearned()
         log("learned \(merged.included.count) tunnel routes, \(merged.excluded.count) exclusions")
+    }
+
+    private func saveLearned() {
+        store[routesClient] = learned
+        store.lastClient = routesClient
+        LearnedRoutesStore.save(store)
     }
 
     private func apply(_ mode: FilterMode?) {
@@ -341,8 +362,8 @@ final class Engine {
                 }
                 learned = ProtectedTable()
                 candidate = nil
-                LearnedRoutesStore.save(learned)
-                log("learned routes reset")
+                saveLearned()
+                log("learned routes of \(routesClient.rawValue) reset")
                 queue.async { self.tick() }
                 return IPCResponse(ok: true, status: publishStatus())
             case .setConfig:
@@ -405,7 +426,8 @@ final class Engine {
             lastCheck: lastCheck,
             message: message,
             protectedCount: config.blockScope == .vpnRoutes && !learned.isEmpty ? learned.included.count : nil,
-            clientRoutingTrusted: trustedClientConnected && state == .protected
+            clientRoutingTrusted: trustedClientConnected && state == .protected,
+            routesClient: routesClient
         )
     }
 }

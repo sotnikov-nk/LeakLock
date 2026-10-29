@@ -140,10 +140,7 @@ struct MenuView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                Text("«Адреса из VPN» блокирует только то, что Amnezia направляет в туннель, остальное идёт напрямую по её списку раздельного туннелирования.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                .help("«Адреса из VPN»: блокируется только то, что Amnezia направляет в туннель, сайты из её списка раздельного туннелирования открываются напрямую.")
             }
             .padding(.bottom, 10)
 
@@ -153,6 +150,7 @@ struct MenuView: View {
             Toggle("Доверять маршрутизации Incy", isOn: binding(\.trustClientRouting))
                 .toggleStyle(.switch)
                 .controlSize(.small)
+                .help("Пока Incy подключён и внешний IP проверен, сайты из списков Direct в Incy открываются напрямую. С другими VPN-клиентами настройка не действует. Без VPN при Incy блокируется весь интернет.")
             Text(trustClientRoutingNote)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -288,13 +286,8 @@ struct MenuView: View {
     }
 
     private var trustClientRoutingNote: String {
-        var note = "Пока Incy подключён и внешний IP проверен, сайты из списков Direct в Incy "
-            + "открываются напрямую, а не блокируются. Включайте вместе с kill switch в Incy: "
-            + "он не даёт другим программам обходить туннель. С другими VPN-клиентами настройка "
-            + "не действует. Без VPN при Incy блокируется весь интернет: Incy направляет в "
-            + "туннель всё, поэтому выбор режима выше на него не влияет."
-        if model.status?.clientRoutingTrusted == true { note += "\nСейчас действует." }
-        return note
+        let note = "Только вместе с kill switch в Incy."
+        return model.status?.clientRoutingTrusted == true ? note + " Сейчас действует." : note
     }
 
     private func binding(_ keyPath: WritableKeyPath<GuardConfig, Bool>) -> Binding<Bool> {
@@ -421,13 +414,14 @@ struct SettingsView: View {
 
             if let status = model.status, status.config.blockScope == .vpnRoutes {
                 Section {
-                    LabeledContent("Маршрутов VPN под защитой", value: status.protectedCount.map { "\($0)" } ?? "пока нет")
+                    LabeledContent("Клиент", value: (status.routesClient ?? .amnezia).title)
+                    LabeledContent("Маршрутов под защитой", value: status.protectedCount.map { "\($0)" } ?? "пока нет")
                     Button("Забыть выученные маршруты") { model.resetLearnedRoutes() }
                         .glassButtons()
                 } header: {
-                    Text("AmneziaVPN: адреса из VPN")
+                    Text("Адреса из VPN")
                 } footer: {
-                    Text("LeakLock запоминает всё, что VPN когда-либо направлял в туннель, и сам этот список не сокращает. Если вы убрали сайты из списка VPN, а они всё равно блокируются, нажмите кнопку при подключённом VPN: список соберётся заново по текущим маршрутам.")
+                    Text("Список маршрутов свой у каждого клиента и сам только растёт. Если сайты, убранные из списка VPN, всё равно блокируются, нажмите кнопку при подключённом VPN.")
                         .foregroundStyle(.secondary)
                 }
             }

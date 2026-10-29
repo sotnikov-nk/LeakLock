@@ -180,19 +180,23 @@ enum Routing {
 }
 
 enum LearnedRoutesStore {
-    static func load() -> ProtectedTable {
+    static func load() -> LearnedRoutes {
+        if let data = FileManager.default.contents(atPath: Paths.learnedRoutesByClientFile),
+           let routes = try? JSONDecoder().decode(LearnedRoutes.self, from: data) {
+            return routes
+        }
         guard let data = FileManager.default.contents(atPath: Paths.learnedRoutesFile),
-              let table = try? JSONDecoder().decode(ProtectedTable.self, from: data) else { return ProtectedTable() }
-        return table
+              let table = try? JSONDecoder().decode(ProtectedTable.self, from: data) else { return LearnedRoutes() }
+        return LearnedRoutes(legacy: table)
     }
 
-    static func save(_ table: ProtectedTable) {
+    static func save(_ routes: LearnedRoutes) {
         do {
             try FileManager.default.createDirectory(
                 atPath: Paths.configDirectory, withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o755]
             )
-            try JSONEncoder().encode(table).write(to: URL(fileURLWithPath: Paths.learnedRoutesFile), options: .atomic)
+            try JSONEncoder().encode(routes).write(to: URL(fileURLWithPath: Paths.learnedRoutesByClientFile), options: .atomic)
         } catch {
             log("cannot save learned routes: \(error)")
         }

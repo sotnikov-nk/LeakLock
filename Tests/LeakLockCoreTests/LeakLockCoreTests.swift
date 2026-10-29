@@ -355,14 +355,31 @@ final class RoutesTests: XCTestCase {
         * (Connected)      AAA04198-0000-0000-0000-000000000002 VPN (llc.itdev.incy) "incy"                  [VPN:llc.itdev.incy]
         """
         XCTAssertEqual(Parse.connectedVPNClients(scutil), ["llc.itdev.incy"])
-        XCTAssertTrue(ClientTrust.isTrustedClientConnected(scutil))
-        XCTAssertFalse(ClientTrust.isTrustedClientConnected(scutil.replacingOccurrences(of: "(Connected)", with: "(Disconnected)")))
-        XCTAssertFalse(ClientTrust.isTrustedClientConnected(
-            "* (Connected)  ID VPN (com.example.vpn) \"x [VPN:llc.itdev.incy]\"  [VPN:com.example.vpn]\n"))
-        XCTAssertFalse(ClientTrust.isTrustedClientConnected(""))
+        XCTAssertEqual(VPNClient.detect(scutil), .incy)
+        XCTAssertEqual(VPNClient.detect(scutil.replacingOccurrences(of: "(Connected)", with: "(Disconnected)")), .amnezia)
+        XCTAssertEqual(VPNClient.detect(
+            "* (Connected)  ID VPN (com.example.vpn) \"x [VPN:llc.itdev.incy]\"  [VPN:com.example.vpn]\n"), .amnezia)
+        XCTAssertEqual(VPNClient.detect(""), .amnezia)
         // Older config files load with the setting off.
         let old = try! JSONDecoder().decode(GuardConfig.self, from: Data(#"{"enabled":true}"#.utf8))
         XCTAssertFalse(old.trustClientRouting)
+    }
+
+    func testLearnedRoutesAreKeptPerClient() {
+        let n = { (s: String) in IPv4Network(s)! }
+        let amnezia = ProtectedTable(included: [n("0.0.0.0/1"), n("128.0.0.0/1")], excluded: [n("203.0.113.0/24")])
+        // A 0.4.4 file holds Amnezia's routes.
+        var routes = LearnedRoutes(legacy: amnezia)
+        XCTAssertEqual(routes.lastClient, .amnezia)
+        XCTAssertEqual(routes[.amnezia], amnezia)
+        XCTAssertTrue(routes[.incy].isEmpty)
+        // Incy's whole-internet table does not leak into Amnezia's.
+        routes[.incy] = ProtectedTable(included: [n("0.0.0.0/0")])
+        routes.lastClient = .incy
+        XCTAssertEqual(routes[.amnezia], amnezia)
+        let decoded = try! JSONDecoder().decode(LearnedRoutes.self, from: try! JSONEncoder().encode(routes))
+        XCTAssertEqual(decoded, routes)
+        XCTAssertTrue(LearnedRoutes(legacy: ProtectedTable()).tables.isEmpty)
     }
 
     func testMergedTableNeverNarrowsOnItsOwn() {

@@ -24,9 +24,9 @@ public struct GuardConfig: Codable, Equatable {
     /// Allow DNS (port 53) to any resolver while the VPN is down. Needed only when the
     /// VPN client resolves the server by host name.
     public var allowDNS: Bool
-    /// While the tunnel is verified and one of `ClientTrust.bundleIDs` is the connected
-    /// VPN, let traffic leave outside the tunnel too. For clients that split traffic
-    /// inside the tunnel process (Incy's Direct rules: the client itself sends those
+    /// While the tunnel is verified and Incy (`VPNClient.incy`) is the connected VPN,
+    /// let traffic leave outside the tunnel too. For clients that split traffic inside
+    /// the tunnel process (Incy's Direct rules: the client itself sends those
     /// connections via Wi-Fi), which pf cannot tell apart from a leak. Safe only together
     /// with the client's own kill switch, which keeps other apps in the tunnel while it
     /// is up; with any other client, or once the tunnel drops or is unverified, this has
@@ -97,14 +97,50 @@ public struct GuardConfig: Codable, Equatable {
     }
 }
 
-/// VPN clients whose own routing `GuardConfig.trustClientRouting` may trust: Network
-/// Extension clients with a kill switch that keeps other apps inside the tunnel.
-public enum ClientTrust {
-    public static let bundleIDs = ["llc.itdev.incy"]
+/// The VPN client a tunnel belongs to. Learned routes are kept per client: Incy routes
+/// the whole internet into its tunnel, which must not turn Amnezia's split tunneling
+/// into "block everything" once Incy has been used.
+public enum VPNClient: String, Codable, CaseIterable {
+    /// AmneziaVPN, and any other client that is not recognized.
+    case amnezia
+    case incy
 
-    /// Whether `scutil --nc list` shows one of the trusted clients connected.
-    public static func isTrustedClientConnected(_ scutilOutput: String) -> Bool {
-        Parse.connectedVPNClients(scutilOutput).contains { bundleIDs.contains($0) }
+    public var title: String {
+        switch self {
+        case .amnezia: return "AmneziaVPN"
+        case .incy: return "Incy"
+        }
+    }
+
+    /// Bundle ID of Incy's Network Extension, as `scutil --nc list` shows it.
+    public static let incyBundleID = "llc.itdev.incy"
+
+    /// The client behind the current tunnel, from `scutil --nc list`.
+    public static func detect(_ scutilOutput: String) -> VPNClient {
+        Parse.connectedVPNClients(scutilOutput).contains(incyBundleID) ? .incy : .amnezia
+    }
+}
+
+/// Learned tunnel routes of every client, and which client was connected last: without
+/// a VPN, its table is the one enforced.
+public struct LearnedRoutes: Codable, Equatable {
+    /// Keyed by `VPNClient.rawValue`; unknown keys from newer versions are kept.
+    public var tables: [String: ProtectedTable]
+    public var lastClient: VPNClient
+
+    public init(tables: [String: ProtectedTable] = [:], lastClient: VPNClient = .amnezia) {
+        self.tables = tables
+        self.lastClient = lastClient
+    }
+
+    /// A single-table file from 0.4.4 and earlier, which only knew Amnezia.
+    public init(legacy: ProtectedTable) {
+        self.init(tables: legacy.isEmpty ? [:] : [VPNClient.amnezia.rawValue: legacy])
+    }
+
+    public subscript(client: VPNClient) -> ProtectedTable {
+        get { tables[client.rawValue] ?? ProtectedTable() }
+        set { tables[client.rawValue] = newValue }
     }
 }
 
@@ -116,6 +152,9 @@ public enum Paths {
     /// Last known set of tunnel destinations, kept so they stay blocked after the VPN
     /// (and its routes) disappear.
     public static let learnedRoutesFile = configDirectory + "/learned-routes.json"
+    /// The same per VPN client (`LearnedRoutes`), since 0.4.5. The old file is migrated
+    /// into Amnezia's table on first start.
+    public static let learnedRoutesByClientFile = configDirectory + "/learned-routes-by-client.json"
     public static let helperPath = "/Library/PrivilegedHelperTools/com.leaklock.daemon"
     public static let launchDaemonPlist = "/Library/LaunchDaemons/com.leaklock.daemon.plist"
     /// Sub-anchor of Apple's `com.apple/*`, which the stock /etc/pf.conf already

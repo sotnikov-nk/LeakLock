@@ -101,6 +101,11 @@ final class Engine {
         if current != tunnel {
             log("VPN tunnel: \(tunnel ?? "none") -> \(current ?? "none")")
             tunnel = current
+            // The schedule belonged to the old tunnel: after a verified check it is a
+            // whole recheck interval away, and a VPN that came back would stay blocked
+            // until then. Check the new tunnel at once.
+            nextCheckAt = .distantPast
+            consecutiveFailures = 0
         }
         // Verification belongs to one interface; a new or vanished tunnel starts over.
         if verifiedTunnel != current { verifiedTunnel = nil }
